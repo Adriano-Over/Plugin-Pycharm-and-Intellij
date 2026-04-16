@@ -1,0 +1,24 @@
+<idea-plugin>
+    <id>com.floatbar</id>
+    <name>FloatBar</name>
+    <vendor email="adrianodstutu@gmail.com">FloatBar</vendor>
+    <description><![CDATA[
+        Shows a floating toolbar with a drawable editor overlay.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <statusBarWidgetFactory implementation="com.floatbar.FloatBarStatusBarWidgetFactory"/>
+    </extensions>
+
+    <actions>
+        <action
+                id="com.floatbar.ToggleAction"
+                class="com.floatbar.FloatBarToggleAction"
+                text="Toggle FloatBar"
+                description="Show or hide FloatBar">
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift D"/>
+        </action>
+    </actions>
+</idea-plugin>
