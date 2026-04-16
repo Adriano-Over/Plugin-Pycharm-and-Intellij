@@ -35,6 +35,7 @@ object PaintGeometryEngine {
         for (stroke in strokes) {
             if (stroke.points.isEmpty()) continue
 
+            // Legacy support for older saved polygon fills
             if (stroke.filled) {
                 val area = buildArea(stroke, toViewPoint) ?: run {
                     rebuilt += stroke.deepCopy()
@@ -51,6 +52,11 @@ object PaintGeometryEngine {
         return rebuilt
     }
 
+    /**
+     * Fill detects the region from the visible outline, then converts it into
+     * many short ordinary strokes. This keeps fill inside the same drawing model
+     * as Draw and Shapes, without creating a special runtime object.
+     */
     fun fillAt(
         strokes: List<StrokePath>,
         seedPoint: Point,
@@ -103,6 +109,7 @@ object PaintGeometryEngine {
             }
             g.draw(path)
 
+            // Close tiny endpoint gaps for fill detection
             if (shifted.first().distance(shifted.last()) <= max(6.0, stroke.width * 1.8)) {
                 g.drawLine(
                     shifted.last().x,
@@ -148,27 +155,47 @@ object PaintGeometryEngine {
 
         if (touchesEdge) return mutableListOf()
 
+        return buildDenseFillStrokes(visited, fillColor, offsetX, offsetY)
+    }
+
+    /**
+     * Converts filled pixels into many short normal strokes.
+     * This avoids a special fill object and keeps everything in the same drawing model.
+     */
+    private fun buildDenseFillStrokes(
+        visited: Array<BooleanArray>,
+        fillColor: Color,
+        offsetX: Int,
+        offsetY: Int
+    ): MutableList<StrokePath> {
         val result = mutableListOf<StrokePath>()
+
         for (y in visited.indices) {
             var x = 0
             while (x < visited[y].size) {
                 while (x < visited[y].size && !visited[y][x]) x++
                 val start = x
                 while (x < visited[y].size && visited[y][x]) x++
-                if (start < x) {
-                    val yWorld = y + offsetY
-                    val x1World = start + offsetX
-                    val x2World = (x - 1) + offsetX
-                    result += StrokePath(
-                        color = fillColor,
-                        width = 1.8f,
-                        points = mutableListOf(
-                            AnchorPoint(0, x1World, yWorld),
-                            AnchorPoint(0, x2World, yWorld)
-                        ),
-                        filled = false,
-                        kind = null
-                    )
+                val end = x - 1
+
+                if (start <= end) {
+                    // Split long horizontal runs into short ordinary segments
+                    // so erase behaves more like draw-tool content and less like scanlines.
+                    var segStart = start
+                    while (segStart <= end) {
+                        val segEnd = minOf(segStart + 6, end)
+                        result += StrokePath(
+                            color = fillColor,
+                            width = 2.0f,
+                            points = mutableListOf(
+                                AnchorPoint(0, segStart + offsetX, y + offsetY),
+                                AnchorPoint(0, segEnd + offsetX, y + offsetY)
+                            ),
+                            filled = false,
+                            kind = null
+                        )
+                        segStart = segEnd + 1
+                    }
                 }
             }
         }
