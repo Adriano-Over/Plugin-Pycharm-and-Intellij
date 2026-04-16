@@ -10,7 +10,6 @@ import java.awt.geom.Area
 import java.awt.geom.Ellipse2D
 import java.awt.geom.Path2D
 import java.awt.geom.PathIterator
-import java.awt.geom.Rectangle2D
 import java.awt.image.BufferedImage
 import kotlin.math.hypot
 import kotlin.math.max
@@ -46,28 +45,20 @@ object PaintGeometryEngine {
                 continue
             }
 
-            val fragments = cutStrokeByEraser(stroke, localPoint, radius, toViewPoint)
-            rebuilt += fragments
+            rebuilt += cutStrokeByEraser(stroke, localPoint, radius, toViewPoint)
         }
 
         return rebuilt
     }
 
-    /**
-     * Rewritten to behave more like a real paint app:
-     * - rasterizes the *visible* outlines of all tools into one mask
-     * - closes tiny endpoint gaps before flood-fill
-     * - uses 8-connected flood fill to prevent diagonal leaks
-     * - returns the filled region as a normal filled StrokePath
-     */
     fun fillAt(
         strokes: List<StrokePath>,
         seedPoint: Point,
         fillColor: Color,
         panelBounds: Rectangle,
         toViewPoint: (AnchorPoint) -> Point?
-    ): StrokePath? {
-        if (panelBounds.width <= 2 || panelBounds.height <= 2) return null
+    ): MutableList<StrokePath> {
+        if (panelBounds.width <= 2 || panelBounds.height <= 2) return mutableListOf()
 
         val offsetX = panelBounds.x
         val offsetY = panelBounds.y
@@ -78,8 +69,6 @@ object PaintGeometryEngine {
         g.color = Color.WHITE
         g.fillRect(0, 0, image.width, image.height)
         g.color = Color.BLACK
-
-        val endpoints = mutableListOf<Pair<Point, Float>>()
 
         for (stroke in strokes) {
             val points = stroke.points.mapNotNull(toViewPoint)
@@ -101,9 +90,8 @@ object PaintGeometryEngine {
             if (points.size < 2) continue
 
             val shifted = points.map { Point(it.x - offsetX, it.y - offsetY) }
-            val strokeWidth = max(2f, stroke.width)
             g.stroke = BasicStroke(
-                strokeWidth,
+                max(2f, stroke.width),
                 BasicStroke.CAP_ROUND,
                 BasicStroke.JOIN_ROUND
             )
@@ -115,11 +103,7 @@ object PaintGeometryEngine {
             }
             g.draw(path)
 
-            endpoints += shifted.first() to strokeWidth
-            endpoints += shifted.last() to strokeWidth
-
-            val closeDistance = max(6.0, strokeWidth * 2.0)
-            if (shifted.first().distance(shifted.last()) <= closeDistance) {
+            if (shifted.first().distance(shifted.last()) <= max(6.0, stroke.width * 1.8)) {
                 g.drawLine(
                     shifted.last().x,
                     shifted.last().y,
@@ -128,16 +112,13 @@ object PaintGeometryEngine {
                 )
             }
         }
-
-        bridgeNearbyEndpoints(g, endpoints)
-
         g.dispose()
 
         val seedX = seedPoint.x - offsetX
         val seedY = seedPoint.y - offsetY
 
-        if (seedX !in 0 until image.width || seedY !in 0 until image.height) return null
-        if (image.getRGB(seedX, seedY) != Color.WHITE.rgb) return null
+        if (seedX !in 0 until image.width || seedY !in 0 until image.height) return mutableListOf()
+        if (image.getRGB(seedX, seedY) != Color.WHITE.rgb) return mutableListOf()
 
         val visited = Array(image.height) { BooleanArray(image.width) }
         val queue = ArrayDeque<Point>()
@@ -165,9 +146,9 @@ object PaintGeometryEngine {
             }
         }
 
-        if (touchesEdge) return null
+        if (touchesEdge) return mutableListOf()
 
-        val area = Area()
+        val result = mutableListOf<StrokePath>()
         for (y in visited.indices) {
             var x = 0
             while (x < visited[y].size) {
@@ -175,55 +156,24 @@ object PaintGeometryEngine {
                 val start = x
                 while (x < visited[y].size && visited[y][x]) x++
                 if (start < x) {
-                    area.add(
-                        Area(
-                            Rectangle2D.Double(
-                                (start + offsetX).toDouble(),
-                                (y + offsetY).toDouble(),
-                                (x - start).toDouble(),
-                                1.0
-                            )
-                        )
+                    val yWorld = y + offsetY
+                    val x1World = start + offsetX
+                    val x2World = (x - 1) + offsetX
+                    result += StrokePath(
+                        color = fillColor,
+                        width = 1.8f,
+                        points = mutableListOf(
+                            AnchorPoint(0, x1World, yWorld),
+                            AnchorPoint(0, x2World, yWorld)
+                        ),
+                        filled = false,
+                        kind = null
                     )
                 }
             }
         }
 
-        val filled = areaToFilledStrokes(area, fillColor, 1.5f)
-        return largestFilledStroke(filled)
-    }
-
-    private fun bridgeNearbyEndpoints(g: java.awt.Graphics2D, endpoints: List<Pair<Point, Float>>) {
-        for (i in endpoints.indices) {
-            val (a, aw) = endpoints[i]
-            for (j in i + 1 until endpoints.size) {
-                val (b, bw) = endpoints[j]
-                val distance = a.distance(b)
-                val threshold = max(6.0, ((aw + bw) * 1.6).toDouble())
-                if (distance <= threshold) {
-                    g.stroke = BasicStroke(
-                        max(2f, max(aw, bw)),
-                        BasicStroke.CAP_ROUND,
-                        BasicStroke.JOIN_ROUND
-                    )
-                    g.drawLine(a.x, a.y, b.x, b.y)
-                }
-            }
-        }
-    }
-
-    private fun largestFilledStroke(strokes: List<StrokePath>): StrokePath? {
-        return strokes.maxByOrNull { stroke ->
-            val pts = stroke.points
-            if (pts.size < 3) return@maxByOrNull 0.0
-            var area = 0.0
-            for (i in pts.indices) {
-                val a = pts[i]
-                val b = pts[(i + 1) % pts.size]
-                area += (a.x * b.dy - b.x * a.dy).toDouble()
-            }
-            kotlin.math.abs(area) / 2.0
-        }
+        return result
     }
 
     private fun cutStrokeByEraser(
@@ -252,8 +202,8 @@ object PaintGeometryEngine {
         for (i in 0 until viewPoints.lastIndex) {
             val (aAnchor, aPoint) = viewPoints[i]
             val (bAnchor, bPoint) = viewPoints[i + 1]
-
             val hits = distancePointToSegment(localPoint, aPoint, bPoint) <= radius
+
             if (!hits) {
                 if (current.isEmpty()) current += aAnchor.copy()
                 current += bAnchor.copy()
@@ -287,30 +237,16 @@ object PaintGeometryEngine {
             when (path.currentSegment(coords)) {
                 PathIterator.SEG_MOVETO -> {
                     if (current.size >= 3) {
-                        results += StrokePath(
-                            color = color,
-                            width = width,
-                            points = current,
-                            filled = true
-                        )
+                        results += StrokePath(color = color, width = width, points = current, filled = true)
                     }
-                    current = mutableListOf(
-                        AnchorPoint(0, coords[0].toInt(), coords[1].toInt())
-                    )
+                    current = mutableListOf(AnchorPoint(0, coords[0].toInt(), coords[1].toInt()))
                 }
-
                 PathIterator.SEG_LINETO -> {
                     current += AnchorPoint(0, coords[0].toInt(), coords[1].toInt())
                 }
-
                 PathIterator.SEG_CLOSE -> {
                     if (current.size >= 3) {
-                        results += StrokePath(
-                            color = color,
-                            width = width,
-                            points = current,
-                            filled = true
-                        )
+                        results += StrokePath(color = color, width = width, points = current, filled = true)
                     }
                     current = mutableListOf()
                 }
@@ -319,12 +255,7 @@ object PaintGeometryEngine {
         }
 
         if (current.size >= 3) {
-            results += StrokePath(
-                color = color,
-                width = width,
-                points = current,
-                filled = true
-            )
+            results += StrokePath(color = color, width = width, points = current, filled = true)
         }
 
         return results

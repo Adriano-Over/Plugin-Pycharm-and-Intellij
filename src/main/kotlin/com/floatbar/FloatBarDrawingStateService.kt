@@ -76,3 +76,5 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
         state.recentColors = colors.toMutableList()
     }
 }
+// this is a teste to GIT
+

@@ -70,7 +70,7 @@ class DrawingCanvasPanel(
                 when (currentTool) {
                     FloatBarToolMode.FILL -> {
                         saveStateForUndo()
-                        val filled = PaintGeometryEngine.fillAt(
+                        val filledStrokes = PaintGeometryEngine.fillAt(
                             strokes = currentStrokes(),
                             seedPoint = e.point,
                             fillColor = drawColor,
@@ -82,8 +82,10 @@ class DrawingCanvasPanel(
                             ),
                             toViewPoint = ::toViewPoint
                         )
-                        if (filled != null) {
-                            currentStrokes().add(convertViewStrokeToAnchors(filled))
+                        if (filledStrokes.isNotEmpty()) {
+                            currentStrokes().addAll(
+                                filledStrokes.map { convertViewStrokeToAnchors(it) }
+                            )
                             persistCurrentStrokes()
                             refreshHistoryState()
                             repaint()
@@ -119,7 +121,6 @@ class DrawingCanvasPanel(
             override fun mouseDragged(e: MouseEvent) {
                 when (currentTool) {
                     FloatBarToolMode.FILL -> return
-
                     FloatBarToolMode.ERASE -> {
                         val previous = lastDragPoint
                         if (previous == null) {
@@ -130,13 +131,11 @@ class DrawingCanvasPanel(
                         lastDragPoint = e.point
                         repaint()
                     }
-
                     FloatBarToolMode.SHAPES -> {
                         val start = shapeStartPoint ?: return
                         shapePreview = buildShapeStroke(start, e.point, selectedShapeKind, e.isShiftDown)
                         repaint()
                     }
-
                     else -> {
                         val stroke = currentStroke ?: return
                         val previous = lastDragPoint
@@ -159,12 +158,9 @@ class DrawingCanvasPanel(
                         refreshHistoryState()
                         repaint()
                     }
-
                     FloatBarToolMode.SHAPES -> {
                         val preview = shapePreview
                         if (preview != null && preview.points.size >= 2) {
-                            // Normalize committed shapes into the same point-based drawing
-                            // model used by pencil strokes so all tools interact consistently.
                             currentStrokes().add(preview.deepCopy())
                             persistCurrentStrokes()
                             refreshHistoryState()
@@ -174,11 +170,9 @@ class DrawingCanvasPanel(
                         lastDragPoint = null
                         repaint()
                     }
-
                     FloatBarToolMode.FILL -> {
                         lastDragPoint = null
                     }
-
                     else -> {
                         currentStroke = null
                         lastDragPoint = null
@@ -195,7 +189,6 @@ class DrawingCanvasPanel(
 
     fun bindEditor(editor: Editor) {
         unbindDocumentListener()
-
         this.editor = editor
         this.currentFile = FileDocumentManager.getInstance().getFile(editor.document)
         currentStroke = null
@@ -274,13 +267,10 @@ class DrawingCanvasPanel(
         val document = editor?.document ?: return
         val undo = undoByDocument.getOrPut(document) { mutableListOf() }
         if (undo.isEmpty()) return
-
         val redo = redoByDocument.getOrPut(document) { mutableListOf() }
         redo += snapshotCurrentStrokes()
-
         val restored = undo.removeAt(undo.lastIndex)
         strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
-
         persistCurrentStrokes()
         refreshHistoryState()
         repaint()
@@ -290,23 +280,17 @@ class DrawingCanvasPanel(
         val document = editor?.document ?: return
         val redo = redoByDocument.getOrPut(document) { mutableListOf() }
         if (redo.isEmpty()) return
-
         val undo = undoByDocument.getOrPut(document) { mutableListOf() }
         undo += snapshotCurrentStrokes()
-
         val restored = redo.removeAt(redo.lastIndex)
         strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
-
         persistCurrentStrokes()
         refreshHistoryState()
         repaint()
     }
 
-    fun canUndo(): Boolean =
-        editor?.document?.let { undoByDocument[it]?.isNotEmpty() == true } == true
-
-    fun canRedo(): Boolean =
-        editor?.document?.let { redoByDocument[it]?.isNotEmpty() == true } == true
+    fun canUndo(): Boolean = editor?.document?.let { undoByDocument[it]?.isNotEmpty() == true } == true
+    fun canRedo(): Boolean = editor?.document?.let { redoByDocument[it]?.isNotEmpty() == true } == true
 
     fun isGridEnabled(): Boolean = gridEnabled
 
@@ -326,12 +310,10 @@ class DrawingCanvasPanel(
                 val removedLines = event.oldFragment.count { it == '\n' }
                 val addedLines = event.newFragment.count { it == '\n' }
                 val delta = addedLines - removedLines
-
                 if (delta < 0) {
                     val removeCount = -delta
                     val startLine = document.getLineNumber(event.offset)
                     val strokes = strokesByDocument[document] ?: return
-
                     for (stroke in strokes) {
                         for (point in stroke.points) {
                             if (point.line > startLine) {
@@ -339,13 +321,11 @@ class DrawingCanvasPanel(
                             }
                         }
                     }
-
                     persistCurrentStrokes()
                     repaint()
                 }
             }
         }
-
         document.addDocumentListener(listener)
         documentListener = listener
     }
@@ -364,8 +344,7 @@ class DrawingCanvasPanel(
         return strokesByDocument.getOrPut(document) { mutableListOf() }
     }
 
-    private fun snapshotCurrentStrokes(): List<StrokePath> =
-        currentStrokes().map { it.deepCopy() }
+    private fun snapshotCurrentStrokes(): List<StrokePath> = currentStrokes().map { it.deepCopy() }
 
     private fun saveStateForUndo() {
         val document = editor?.document ?: return
@@ -384,7 +363,6 @@ class DrawingCanvasPanel(
         val editor = editor ?: return
         val filePath = currentFile?.path ?: return
         val stateService = project.service<FloatBarDrawingStateService>()
-
         val loaded = stateService.getStrokes(filePath).map { saved ->
             StrokePath(
                 color = Color(saved.color, true),
@@ -396,14 +374,12 @@ class DrawingCanvasPanel(
                 kind = saved.kind?.let { runCatching { ShapeKind.valueOf(it) }.getOrNull() }
             )
         }.toMutableList()
-
         strokesByDocument[editor.document] = loaded
     }
 
     private fun persistCurrentStrokes() {
         val filePath = currentFile?.path ?: return
         val stateService = project.service<FloatBarDrawingStateService>()
-
         val saved = currentStrokes().map { stroke ->
             SavedStroke(
                 color = stroke.color.rgb,
@@ -415,27 +391,23 @@ class DrawingCanvasPanel(
                 kind = stroke.kind?.name
             )
         }
-
         stateService.setStrokes(filePath, saved)
     }
 
     private fun applyEraseAt(point: Point) {
         val document = editor?.document ?: return
-
         val erased = PaintGeometryEngine.eraseAt(
             strokes = currentStrokes(),
             localPoint = point,
             radius = eraseRadius,
             toViewPoint = ::toViewPoint
         )
-
         strokesByDocument[document] = erased.toMutableList()
     }
 
     private fun eraseInterpolated(from: Point, to: Point) {
         val distance = from.distance(to)
         val steps = max(1, ceil(distance / 6.0).toInt())
-
         for (i in 1..steps) {
             val t = i.toDouble() / steps
             val p = Point(
@@ -449,7 +421,6 @@ class DrawingCanvasPanel(
     private fun addInterpolatedPoints(stroke: StrokePath, from: Point, to: Point) {
         val distance = from.distance(to)
         val steps = max(1, ceil(distance / 2.0).toInt())
-
         for (i in 1..steps) {
             val t = i.toDouble() / steps
             val p = Point(
@@ -463,22 +434,15 @@ class DrawingCanvasPanel(
     private fun addAnchorPoint(stroke: StrokePath, point: Point) {
         val anchor = viewPointToAnchor(point) ?: return
         val last = stroke.points.lastOrNull()
-
-        if (last != null &&
-            last.line == anchor.line &&
-            abs(last.x - anchor.x) < 2 &&
-            abs(last.dy - anchor.dy) < 2
-        ) {
+        if (last != null && last.line == anchor.line && abs(last.x - anchor.x) < 2 && abs(last.dy - anchor.dy) < 2) {
             return
         }
-
         stroke.points += anchor
     }
 
     private fun viewPointToAnchor(point: Point): AnchorPoint? {
         val editor = editor ?: return null
         val lineHeight = editor.lineHeight.takeIf { it > 0 } ?: 16
-
         val visibleLine = max(0, (point.y - canvasPadding) / lineHeight)
         val line = max(0, visibleLine)
         val dy = point.y - (canvasPadding + line * lineHeight)
@@ -513,14 +477,8 @@ class DrawingCanvasPanel(
         )
     }
 
-    private fun buildShapeStroke(
-        start: Point,
-        end: Point,
-        kind: ShapeKind,
-        constrain: Boolean
-    ): StrokePath {
+    private fun buildShapeStroke(start: Point, end: Point, kind: ShapeKind, constrain: Boolean): StrokePath {
         val adjusted = if (constrain) constrainPoint(start, end, kind) else end
-
         val viewPoints = when (kind) {
             ShapeKind.RECTANGLE, ShapeKind.PROCESS -> rectanglePoints(start, adjusted)
             ShapeKind.ELLIPSE, ShapeKind.CONNECTOR -> ellipsePoints(start, adjusted)
@@ -533,7 +491,6 @@ class DrawingCanvasPanel(
         }
 
         val anchors = viewPoints.mapNotNull { viewPointToAnchor(it) }.toMutableList()
-
         return StrokePath(
             color = drawColor,
             width = 3.5f,
@@ -581,7 +538,6 @@ class DrawingCanvasPanel(
         val right = max(a.x, b.x)
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
-
         return polyline(
             Point(left, top),
             Point(right, top),
@@ -598,7 +554,6 @@ class DrawingCanvasPanel(
         val bottom = max(a.y, b.y)
         val cx = (left + right) / 2
         val cy = (top + bottom) / 2
-
         return polyline(
             Point(cx, top),
             Point(right, cy),
@@ -614,7 +569,6 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val slant = max(10, (right - left) / 6)
-
         return polyline(
             Point(left + slant, top),
             Point(right, top),
@@ -630,7 +584,6 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val wave = max(8, (bottom - top) / 7)
-
         return polyline(
             Point(left, top),
             Point(right, top),
@@ -648,7 +601,6 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val r = max(8, min((right - left) / 4, (bottom - top) / 2))
-
         return polyline(
             Point(left + r, top),
             Point(right - r, top),
@@ -681,8 +633,7 @@ class DrawingCanvasPanel(
         }
     }
 
-    private fun linePoints(a: Point, b: Point): List<Point> =
-        interpolateLine(a, b, 2.0)
+    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, 2.0)
 
     private fun arrowPoints(a: Point, b: Point): List<Point> {
         val dx = (b.x - a.x).toDouble()
@@ -718,7 +669,6 @@ class DrawingCanvasPanel(
 
     private fun polyline(vararg points: Point): List<Point> {
         if (points.isEmpty()) return emptyList()
-
         val result = mutableListOf<Point>()
         for (i in 0 until points.lastIndex) {
             val segment = interpolateLine(points[i], points[i + 1], 2.0)
@@ -745,7 +695,6 @@ class DrawingCanvasPanel(
 
     override fun paintComponent(graphics: Graphics) {
         super.paintComponent(graphics)
-
         val editor = editor ?: return
         val g = graphics as Graphics2D
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
