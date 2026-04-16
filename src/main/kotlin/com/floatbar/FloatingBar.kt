@@ -46,7 +46,9 @@ class FloatingBar(
     )
     private val overlayController = EditorOverlayController(project, canvasPanel)
 
-    private lateinit var drawingButton: JButton
+    
+    private var startedDefaultActivation = false
+private lateinit var drawingButton: JButton
     private lateinit var erasingButton: JButton
     private lateinit var fillButton: JButton
     private lateinit var colorButton: JButton
@@ -201,6 +203,26 @@ class FloatingBar(
     fun toggle() {
         isVisible = !isVisible
         visibilityListeners.forEach { it(isVisible) }
+    }
+
+
+    fun activateByDefault() {
+        if (startedDefaultActivation) return
+        startedDefaultActivation = true
+
+        if (!isVisible) {
+            isVisible = true
+        }
+
+        overlayController.toggle()
+    }
+
+    fun showBar() {
+        isVisible = true
+    }
+
+    fun hideBar() {
+        isVisible = false
     }
 
     override fun dispose() {
