@@ -10,6 +10,9 @@ data class SavedPoint(
     var column: Int = 0,
     var dx: Int = 0,
     var dy: Int = 0,
+    var offset: Int = 0,
+    var outsideCode: Boolean = false,
+    var afterLineEndPx: Int = 0,
     // Legacy field kept only so older XML can still deserialize.
     var x: Int = 0
 )
