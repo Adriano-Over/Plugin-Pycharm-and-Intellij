@@ -66,10 +66,11 @@ class DrawingCanvasPanel(
     private val dirtyPaddingPx = 28
     private val eraseMinMovePx = 2.0
 
-    // Freehand-only simplification. Small tolerance keeps the current look nearly identical
-    // while reducing stored points after each completed stroke.
     private val freehandSimplifyTolerancePx = 1.35
     private val freehandSimplifyMinPoints = 10
+
+    private val shapeEdgeSpacing = 6.0
+    private val ellipseSegments = 36
 
     init {
         isOpaque = false
@@ -548,9 +549,7 @@ class DrawingCanvasPanel(
 
         val result = mutableListOf<AnchorPoint>()
         for (i in resolved.indices) {
-            if (keep[i]) {
-                result += resolved[i].first
-            }
+            if (keep[i]) result += resolved[i].first
         }
 
         return if (result.size >= 2) result else points.map { it.copy() }.toMutableList()
@@ -591,9 +590,7 @@ class DrawingCanvasPanel(
         val dx = (b.x - a.x).toDouble()
         val dy = (b.y - a.y).toDouble()
 
-        if (dx == 0.0 && dy == 0.0) {
-            return p.distance(a)
-        }
+        if (dx == 0.0 && dy == 0.0) return p.distance(a)
 
         val t = (((p.x - a.x) * dx) + ((p.y - a.y) * dy)) / (dx * dx + dy * dy)
         val clamped = t.coerceIn(0.0, 1.0)
@@ -809,7 +806,7 @@ class DrawingCanvasPanel(
         val right = max(a.x, b.x)
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left, top),
             Point(right, top),
             Point(right, bottom),
@@ -825,7 +822,7 @@ class DrawingCanvasPanel(
         val bottom = max(a.y, b.y)
         val cx = (left + right) / 2
         val cy = (top + bottom) / 2
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(cx, top),
             Point(right, cy),
             Point(cx, bottom),
@@ -840,7 +837,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val slant = max(10, (right - left) / 6)
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left + slant, top),
             Point(right, top),
             Point(right - slant, bottom),
@@ -855,7 +852,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val wave = max(8, (bottom - top) / 7)
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left, top),
             Point(right, top),
             Point(right, bottom - wave),
@@ -872,7 +869,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val r = max(8, min((right - left) / 4, (bottom - top) / 2))
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left + r, top),
             Point(right - r, top),
             Point(right, top + r),
@@ -895,8 +892,8 @@ class DrawingCanvasPanel(
         val rx = max(1.0, (right - left) / 2.0)
         val ry = max(1.0, (bottom - top) / 2.0)
 
-        return (0..72).map { i ->
-            val t = (PI * 2.0) * i / 72.0
+        return (0..ellipseSegments).map { i ->
+            val t = (PI * 2.0) * i / ellipseSegments.toDouble()
             Point(
                 (cx + cos(t) * rx).roundToInt(),
                 (cy + sin(t) * ry).roundToInt()
@@ -904,7 +901,7 @@ class DrawingCanvasPanel(
         }
     }
 
-    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, 2.0)
+    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, shapeEdgeSpacing)
 
     private fun arrowPoints(a: Point, b: Point): List<Point> {
         val dx = (b.x - a.x).toDouble()
@@ -931,18 +928,22 @@ class DrawingCanvasPanel(
             (b.y - uy * (head * 0.35)).roundToInt()
         )
 
-        return polyline(
-            *interpolateLine(a, shaftEnd, 2.0).toTypedArray(),
-            *interpolateLine(tipLeft, b, 2.0).toTypedArray(),
-            *interpolateLine(b, tipRight, 2.0).toTypedArray()
+        return polyline(shapeEdgeSpacing,
+            *interpolateLine(a, shaftEnd, shapeEdgeSpacing).toTypedArray(),
+            *interpolateLine(tipLeft, b, shapeEdgeSpacing).toTypedArray(),
+            *interpolateLine(b, tipRight, shapeEdgeSpacing).toTypedArray()
         )
     }
 
     private fun polyline(vararg points: Point): List<Point> {
+        return polyline(2.0, *points)
+    }
+
+    private fun polyline(spacing: Double, vararg points: Point): List<Point> {
         if (points.isEmpty()) return emptyList()
         val result = mutableListOf<Point>()
         for (i in 0 until points.lastIndex) {
-            val segment = interpolateLine(points[i], points[i + 1], 2.0)
+            val segment = interpolateLine(points[i], points[i + 1], spacing)
             if (result.isNotEmpty() && segment.isNotEmpty()) {
                 result.removeAt(result.lastIndex)
             }
@@ -1007,11 +1008,56 @@ class DrawingCanvasPanel(
             paintGridWithEdge(g, lineHeight)
         }
 
+        val clip = g.clipBounds ?: Rectangle(0, 0, width, height)
+        val visibleLineRange = resolveVisibleLineRange(clip)
+
         for (stroke in currentStrokes()) {
-            paintStroke(g, stroke)
+            if (strokeMayIntersectVisibleLines(stroke, visibleLineRange.first, visibleLineRange.second)) {
+                paintStroke(g, stroke)
+            }
         }
 
-        shapePreview?.let { paintStroke(g, it, preview = true) }
+        shapePreview?.let {
+            if (strokeMayIntersectVisibleLines(it, visibleLineRange.first, visibleLineRange.second)) {
+                paintStroke(g, it, preview = true)
+            }
+        }
+    }
+
+    private fun resolveVisibleLineRange(clip: Rectangle): Pair<Int, Int> {
+        val editor = editor ?: return 0 to Int.MAX_VALUE
+        val document = editor.document
+        if (document.lineCount <= 0) return 0 to 0
+
+        val topEditorPoint = SwingUtilities.convertPoint(this, Point(clip.x, clip.y), editor.contentComponent)
+        val bottomEditorPoint = SwingUtilities.convertPoint(
+            this,
+            Point(clip.x + clip.width, clip.y + clip.height),
+            editor.contentComponent
+        )
+
+        val topLine = editor.xyToLogicalPosition(topEditorPoint).line.coerceIn(0, document.lineCount - 1)
+        val bottomLine = editor.xyToLogicalPosition(bottomEditorPoint).line.coerceIn(0, document.lineCount - 1)
+
+        return (topLine - 2).coerceAtLeast(0) to (bottomLine + 2).coerceAtMost(document.lineCount - 1)
+    }
+
+    private fun strokeMayIntersectVisibleLines(stroke: StrokePath, visibleTopLine: Int, visibleBottomLine: Int): Boolean {
+        if (stroke.points.isEmpty()) return false
+
+        var minLine = Int.MAX_VALUE
+        var maxLine = Int.MIN_VALUE
+
+        for (point in stroke.points) {
+            minLine = min(minLine, point.line)
+            maxLine = max(maxLine, point.line)
+            if (minLine <= visibleBottomLine && maxLine >= visibleTopLine) {
+                // keep scanning until bounds are meaningful, but early condition is cheap
+            }
+        }
+
+        if (minLine == Int.MAX_VALUE) return false
+        return maxLine >= visibleTopLine && minLine <= visibleBottomLine
     }
 
     private fun paintGridWithEdge(g: Graphics2D, cellSize: Int) {
