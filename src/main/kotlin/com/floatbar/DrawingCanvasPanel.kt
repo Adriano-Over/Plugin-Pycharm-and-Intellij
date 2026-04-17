@@ -66,6 +66,9 @@ class DrawingCanvasPanel(
     private val dirtyPaddingPx = 28
     private val eraseMinMovePx = 2.0
 
+    private val shapeEdgeSpacing = 6.0
+    private val ellipseSegments = 36
+
     init {
         isOpaque = false
         preferredSize = Dimension(10, 10)
@@ -715,7 +718,7 @@ class DrawingCanvasPanel(
         val right = max(a.x, b.x)
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left, top),
             Point(right, top),
             Point(right, bottom),
@@ -731,7 +734,7 @@ class DrawingCanvasPanel(
         val bottom = max(a.y, b.y)
         val cx = (left + right) / 2
         val cy = (top + bottom) / 2
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(cx, top),
             Point(right, cy),
             Point(cx, bottom),
@@ -746,7 +749,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val slant = max(10, (right - left) / 6)
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left + slant, top),
             Point(right, top),
             Point(right - slant, bottom),
@@ -761,7 +764,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val wave = max(8, (bottom - top) / 7)
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left, top),
             Point(right, top),
             Point(right, bottom - wave),
@@ -778,7 +781,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val r = max(8, min((right - left) / 4, (bottom - top) / 2))
-        return polyline(
+        return polyline(shapeEdgeSpacing,
             Point(left + r, top),
             Point(right - r, top),
             Point(right, top + r),
@@ -801,8 +804,8 @@ class DrawingCanvasPanel(
         val rx = max(1.0, (right - left) / 2.0)
         val ry = max(1.0, (bottom - top) / 2.0)
 
-        return (0..72).map { i ->
-            val t = (PI * 2.0) * i / 72.0
+        return (0..ellipseSegments).map { i ->
+            val t = (PI * 2.0) * i / ellipseSegments.toDouble()
             Point(
                 (cx + cos(t) * rx).roundToInt(),
                 (cy + sin(t) * ry).roundToInt()
@@ -810,7 +813,7 @@ class DrawingCanvasPanel(
         }
     }
 
-    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, 2.0)
+    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, shapeEdgeSpacing)
 
     private fun arrowPoints(a: Point, b: Point): List<Point> {
         val dx = (b.x - a.x).toDouble()
@@ -837,18 +840,22 @@ class DrawingCanvasPanel(
             (b.y - uy * (head * 0.35)).roundToInt()
         )
 
-        return polyline(
-            *interpolateLine(a, shaftEnd, 2.0).toTypedArray(),
-            *interpolateLine(tipLeft, b, 2.0).toTypedArray(),
-            *interpolateLine(b, tipRight, 2.0).toTypedArray()
+        return polyline(shapeEdgeSpacing,
+            *interpolateLine(a, shaftEnd, shapeEdgeSpacing).toTypedArray(),
+            *interpolateLine(tipLeft, b, shapeEdgeSpacing).toTypedArray(),
+            *interpolateLine(b, tipRight, shapeEdgeSpacing).toTypedArray()
         )
     }
 
     private fun polyline(vararg points: Point): List<Point> {
+        return polyline(2.0, *points)
+    }
+
+    private fun polyline(spacing: Double, vararg points: Point): List<Point> {
         if (points.isEmpty()) return emptyList()
         val result = mutableListOf<Point>()
         for (i in 0 until points.lastIndex) {
-            val segment = interpolateLine(points[i], points[i + 1], 2.0)
+            val segment = interpolateLine(points[i], points[i + 1], spacing)
             if (result.isNotEmpty() && segment.isNotEmpty()) {
                 result.removeAt(result.lastIndex)
             }
@@ -975,11 +982,22 @@ class DrawingCanvasPanel(
             return
         }
 
-        g.stroke = BasicStroke(
-            stroke.width,
-            BasicStroke.CAP_ROUND,
-            BasicStroke.JOIN_ROUND
-        )
+        g.stroke = if (preview && stroke.kind != null) {
+            BasicStroke(
+                stroke.width,
+                BasicStroke.CAP_ROUND,
+                BasicStroke.JOIN_ROUND,
+                10f,
+                floatArrayOf(10f, 8f),
+                0f
+            )
+        } else {
+            BasicStroke(
+                stroke.width,
+                BasicStroke.CAP_ROUND,
+                BasicStroke.JOIN_ROUND
+            )
+        }
 
         val path = if (stroke.kind == null) {
             buildSmoothFreehandPath(points)
