@@ -61,27 +61,66 @@ object PaintGeometryEngine {
     }
 
     private fun buildEraserArea(points: List<Point>, radius: Double): Area {
+        if (points.isEmpty()) return Area()
+
         val area = Area()
-        for (point in points) {
+
+        if (points.size == 1) {
+            val p = points.first()
             area.add(
                 Area(
                     Ellipse2D.Double(
-                        point.x - radius,
-                        point.y - radius,
+                        p.x - radius,
+                        p.y - radius,
                         radius * 2,
                         radius * 2
                     )
                 )
             )
+            return area
         }
+
+        val path = Path2D.Double()
+        path.moveTo(points.first().x.toDouble(), points.first().y.toDouble())
+        for (point in points.drop(1)) {
+            path.lineTo(point.x.toDouble(), point.y.toDouble())
+        }
+
+        val strokeShape = BasicStroke(
+            (radius * 2.0).toFloat(),
+            BasicStroke.CAP_ROUND,
+            BasicStroke.JOIN_ROUND
+        ).createStrokedShape(path)
+
+        area.add(Area(strokeShape))
+
+        val first = points.first()
+        val last = points.last()
+
+        area.add(
+            Area(
+                Ellipse2D.Double(
+                    first.x - radius,
+                    first.y - radius,
+                    radius * 2,
+                    radius * 2
+                )
+            )
+        )
+        area.add(
+            Area(
+                Ellipse2D.Double(
+                    last.x - radius,
+                    last.y - radius,
+                    radius * 2,
+                    radius * 2
+                )
+            )
+        )
+
         return area
     }
 
-    /**
-     * Fill detects the region from the visible outline, then converts it into
-     * many short ordinary strokes. This keeps fill inside the same drawing model
-     * as Draw and Shapes, without creating a special runtime object.
-     */
     fun fillAt(
         strokes: List<StrokePath>,
         seedPoint: Point,
@@ -287,7 +326,10 @@ object PaintGeometryEngine {
             return false
         }
 
-        val steps = maxOf(1, kotlin.math.ceil(a.distance(b) / 6.0).toInt())
+        val segmentLength = a.distance(b)
+        val stepSize = 10.0
+        val steps = maxOf(1, kotlin.math.ceil(segmentLength / stepSize).toInt())
+
         for (i in 0..steps) {
             val t = i.toDouble() / steps
             val x = a.x + (b.x - a.x) * t

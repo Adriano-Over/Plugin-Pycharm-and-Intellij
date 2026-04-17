@@ -64,6 +64,7 @@ class DrawingCanvasPanel(
     private val gridExtendLeftPx = 8
     private val minCodeClearancePx = 8
     private val dirtyPaddingPx = 28
+    private val eraseMinMovePx = 2.0
 
     init {
         isOpaque = false
@@ -134,11 +135,19 @@ class DrawingCanvasPanel(
                     FloatBarToolMode.ERASE -> {
                         val safePoint = clampPointToDrawableArea(e.point) ?: return
                         val previous = lastDragPoint
-                        val samples = if (previous == null) {
-                            listOf(safePoint)
-                        } else {
-                            buildEraseSamples(previous, safePoint)
+
+                        if (previous == null) {
+                            applyErasePath(listOf(safePoint))
+                            lastDragPoint = safePoint
+                            repaintAround(listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
+                            return
                         }
+
+                        if (previous.distance(safePoint) < eraseMinMovePx) {
+                            return
+                        }
+
+                        val samples = buildEraseSamples(previous, safePoint)
                         applyErasePath(samples)
                         lastDragPoint = safePoint
                         repaintAround(samples, dirtyPaddingPx + eraseRadius.roundToInt())
@@ -450,8 +459,9 @@ class DrawingCanvasPanel(
     }
 
     private fun buildEraseSamples(from: Point, to: Point): List<Point> {
+        val spacing = max(6.0, eraseRadius * 1.35)
         val distance = from.distance(to)
-        val steps = max(1, ceil(distance / 12.0).toInt())
+        val steps = max(1, ceil(distance / spacing).toInt())
         val points = ArrayList<Point>(steps + 1)
         for (i in 0..steps) {
             val t = i.toDouble() / steps
