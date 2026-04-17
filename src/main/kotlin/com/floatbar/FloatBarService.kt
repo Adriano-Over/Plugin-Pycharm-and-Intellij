@@ -16,6 +16,13 @@ class FloatBarService(
     private var bar: FloatingBar? = null
     private val visibilityListeners = linkedMapOf<Int, (Boolean) -> Unit>()
     private var nextListenerId = 0
+    private var visible = false
+
+    private fun handleVisibilityChanged(isVisible: Boolean) {
+        if (visible == isVisible) return
+        visible = isVisible
+        visibilityListeners.values.forEach { it(isVisible) }
+    }
 
     private fun getOrCreateBar(): FloatingBar {
         val existing = bar
@@ -25,8 +32,38 @@ class FloatBarService(
             ?: JOptionPane.getRootFrame()
 
         return FloatingBar(owner, project).also { created ->
-            visibilityListeners.values.forEach(created::addVisibilityListener)
+            created.addVisibilityListener(::handleVisibilityChanged)
+            if (visible) {
+                created.showBar()
+            } else {
+                created.hideBar()
+            }
             bar = created
+        }
+    }
+
+    fun isVisible(): Boolean = visible
+
+    fun showDefault() {
+        SwingUtilities.invokeLater {
+            getOrCreateBar().activateByDefault()
+        }
+    }
+
+    fun showBar() {
+        SwingUtilities.invokeLater {
+            getOrCreateBar().showBar()
+        }
+    }
+
+    fun hideBar() {
+        SwingUtilities.invokeLater {
+            val existing = bar
+            if (existing != null) {
+                existing.hideBar()
+            } else {
+                handleVisibilityChanged(false)
+            }
         }
     }
 
@@ -39,12 +76,9 @@ class FloatBarService(
     fun addVisibilityListener(listener: (Boolean) -> Unit): VisibilitySubscription {
         val id = nextListenerId++
         visibilityListeners[id] = listener
-        bar?.addVisibilityListener(listener)
+        listener(visible)
         return VisibilitySubscription {
-            val removed = visibilityListeners.remove(id)
-            if (removed != null) {
-                bar?.removeVisibilityListener(removed)
-            }
+            visibilityListeners.remove(id)
         }
     }
 

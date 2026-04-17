@@ -45,8 +45,8 @@ class DrawingCanvasPanel(
     private var currentFile: VirtualFile? = null
 
     private val strokesByDocument = mutableMapOf<Document, MutableList<StrokePath>>()
-    private val strokeBoundsByDocument = mutableMapOf<Document, MutableMap<StrokePath, StrokeLineBounds>>()
-    private val strokeGeometryByDocument = mutableMapOf<Document, MutableMap<StrokePath, StrokeGeometryContent>>()
+    private val strokeBoundsByDocument = mutableMapOf<Document, MutableMap<Long, StrokeLineBounds>>()
+    private val strokeGeometryByDocument = mutableMapOf<Document, MutableMap<Long, StrokeGeometryContent>>()
     private val undoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
     private val redoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
 
@@ -384,12 +384,12 @@ class DrawingCanvasPanel(
         return strokesByDocument.getOrPut(document) { mutableListOf() }
     }
 
-    private fun currentStrokeBounds(): MutableMap<StrokePath, StrokeLineBounds> {
+    private fun currentStrokeBounds(): MutableMap<Long, StrokeLineBounds> {
         val document = editor?.document ?: return mutableMapOf()
         return strokeBoundsByDocument.getOrPut(document) { mutableMapOf() }
     }
 
-    private fun currentStrokeGeometries(): MutableMap<StrokePath, StrokeGeometryContent> {
+    private fun currentStrokeGeometries(): MutableMap<Long, StrokeGeometryContent> {
         val document = editor?.document ?: return mutableMapOf()
         return strokeGeometryByDocument.getOrPut(document) { mutableMapOf() }
     }
@@ -417,9 +417,9 @@ class DrawingCanvasPanel(
 
     private fun rebuildStrokeBounds(document: Document) {
         val strokes = strokesByDocument[document] ?: mutableListOf()
-        val rebuilt = mutableMapOf<StrokePath, StrokeLineBounds>()
+        val rebuilt = mutableMapOf<Long, StrokeLineBounds>()
         for (stroke in strokes) {
-            computeStrokeLineBounds(stroke)?.let { rebuilt[stroke] = it }
+            computeStrokeLineBounds(stroke)?.let { rebuilt[stroke.id] = it }
         }
         strokeBoundsByDocument[document] = rebuilt
     }
@@ -440,13 +440,13 @@ class DrawingCanvasPanel(
 
     private fun updateStrokeBounds(stroke: StrokePath) {
         val bounds = computeStrokeLineBounds(stroke) ?: return
-        currentStrokeBounds()[stroke] = bounds
+        currentStrokeBounds()[stroke.id] = bounds
     }
 
     private fun expandStrokeBoundsWithAnchor(stroke: StrokePath, anchor: AnchorPoint) {
         val boundsMap = currentStrokeBounds()
-        val existing = boundsMap[stroke]
-        boundsMap[stroke] = if (existing == null) {
+        val existing = boundsMap[stroke.id]
+        boundsMap[stroke.id] = if (existing == null) {
             StrokeLineBounds(anchor.line, anchor.line)
         } else {
             StrokeLineBounds(
@@ -457,7 +457,7 @@ class DrawingCanvasPanel(
     }
 
     private fun invalidateStrokeGeometry(stroke: StrokePath) {
-        currentStrokeGeometries().remove(stroke)
+        currentStrokeGeometries().remove(stroke.id)
     }
 
     private fun resetStrokeGeometryCache(document: Document) {
@@ -542,7 +542,7 @@ class DrawingCanvasPanel(
         val candidates = mutableListOf<StrokePath>()
 
         for (stroke in allStrokes) {
-            val bounds = boundsMap[stroke] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke] = it }
+            val bounds = boundsMap[stroke.id] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
             if (bounds == null) {
                 untouched += stroke
                 continue
@@ -865,11 +865,11 @@ class DrawingCanvasPanel(
 
     private fun getOrBuildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
         val cache = currentStrokeGeometries()
-        val cached = cache[stroke]
+        val cached = cache[stroke.id]
         if (cached != null) return cached
 
         val built = buildStrokeGeometryContent(stroke) ?: return null
-        cache[stroke] = built
+        cache[stroke.id] = built
         return built
     }
 
@@ -1199,7 +1199,7 @@ class DrawingCanvasPanel(
         gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
 
         for (stroke in currentStrokes()) {
-            val bounds = boundsMap[stroke] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke] = it }
+            val bounds = boundsMap[stroke.id] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
             if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
                 paintStroke(gContent, stroke)
             }

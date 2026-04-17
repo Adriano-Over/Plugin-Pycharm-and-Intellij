@@ -1,51 +1,25 @@
 package com.floatbar
 
-import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.wm.WindowManager
-import java.awt.Frame
-import javax.swing.SwingUtilities
 
-@Service(Service.Level.PROJECT)
+@Deprecated("Use FloatBarService directly; this facade only delegates for compatibility.")
 class FloatingBarManagerService(
     private val project: Project
 ) {
-    private var floatingBar: FloatingBar? = null
-
-    fun getOrCreate(): FloatingBar? {
-        val existing = floatingBar
-        if (existing != null) return existing
-
-        val frame = WindowManager.getInstance().getFrame(project) as? Frame ?: return null
-        val created = FloatingBar(frame, project)
-        floatingBar = created
-        return created
-    }
-
     fun showDefault() {
-        SwingUtilities.invokeLater {
-            val bar = getOrCreate() ?: return@invokeLater
-            bar.activateByDefault()
-            bar.isVisible = true
-        }
+        project.service<FloatBarService>().showDefault()
     }
 
     fun showBar() {
-        SwingUtilities.invokeLater {
-            getOrCreate()?.showBar()
-        }
+        project.service<FloatBarService>().showBar()
     }
 
     fun hideBar() {
-        SwingUtilities.invokeLater {
-            floatingBar?.hideBar()
-        }
+        project.service<FloatBarService>().hideBar()
     }
 
     fun toggleBar() {
-        SwingUtilities.invokeLater {
-            val bar = getOrCreate() ?: return@invokeLater
-            if (bar.isVisible) bar.hideBar() else bar.showBar()
-        }
+        project.service<FloatBarService>().toggle()
     }
 }

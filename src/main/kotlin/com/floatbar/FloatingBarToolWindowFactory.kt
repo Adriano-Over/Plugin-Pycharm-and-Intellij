@@ -1,5 +1,6 @@
 package com.floatbar
 
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
@@ -18,7 +19,7 @@ class FloatingBarToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun shouldBeAvailable(project: Project): Boolean = true
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        val manager = project.getService(FloatingBarManagerService::class.java)
+        val floatBarService = project.service<FloatBarService>()
 
         val panel = JBPanel<JBPanel<*>>().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -31,19 +32,19 @@ class FloatingBarToolWindowFactory : ToolWindowFactory, DumbAware {
 
             add(JButton("Open Floating Bar").apply {
                 alignmentX = 0f
-                addActionListener { manager.showBar() }
+                addActionListener { floatBarService.showBar() }
             })
             add(Box.createRigidArea(Dimension(0, 8)))
 
             add(JButton("Hide Floating Bar").apply {
                 alignmentX = 0f
-                addActionListener { manager.hideBar() }
+                addActionListener { floatBarService.hideBar() }
             })
             add(Box.createRigidArea(Dimension(0, 8)))
 
             add(JButton("Toggle Floating Bar").apply {
                 alignmentX = 0f
-                addActionListener { manager.toggleBar() }
+                addActionListener { floatBarService.toggle() }
             })
         }
 

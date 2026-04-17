@@ -194,26 +194,30 @@ private lateinit var drawingButton: JButton
 
     fun addVisibilityListener(listener: (Boolean) -> Unit) {
         visibilityListeners += listener
+        listener(isVisible)
     }
 
     fun removeVisibilityListener(listener: (Boolean) -> Unit) {
         visibilityListeners -= listener
     }
 
-    fun toggle() {
-        isVisible = !isVisible
-        visibilityListeners.forEach { it(isVisible) }
+    override fun setVisible(visible: Boolean) {
+        val changed = isVisible != visible
+        super.setVisible(visible)
+        if (changed) {
+            visibilityListeners.forEach { it(visible) }
+        }
     }
 
+    fun toggle() {
+        isVisible = !isVisible
+    }
 
     fun activateByDefault() {
         if (startedDefaultActivation) return
         startedDefaultActivation = true
 
-        if (!isVisible) {
-            isVisible = true
-        }
-
+        showBar()
         overlayController.toggle()
     }
 

@@ -1,6 +1,7 @@
 package com.floatbar
 
 import java.awt.Color
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Document-anchored point.
@@ -24,7 +25,12 @@ data class AnchorPoint(
     var afterLineEndPx: Int = 0
 )
 
+private val strokeIdSequence = AtomicLong(1L)
+
+private fun nextStrokeId(): Long = strokeIdSequence.getAndIncrement()
+
 data class StrokePath(
+    val id: Long = nextStrokeId(),
     val color: Color,
     val width: Float,
     val points: MutableList<AnchorPoint> = mutableListOf(),
@@ -32,6 +38,7 @@ data class StrokePath(
     val kind: ShapeKind? = null
 ) {
     fun deepCopy(): StrokePath = StrokePath(
+        id = id,
         color = Color(color.red, color.green, color.blue, color.alpha),
         width = width,
         points = points.map { it.copy() }.toMutableList(),
