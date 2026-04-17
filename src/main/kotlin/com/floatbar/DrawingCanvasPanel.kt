@@ -15,6 +15,7 @@ import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
+import java.awt.Polygon
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.event.MouseAdapter
@@ -45,6 +46,7 @@ class DrawingCanvasPanel(
 
     private val strokesByDocument = mutableMapOf<Document, MutableList<StrokePath>>()
     private val strokeBoundsByDocument = mutableMapOf<Document, MutableMap<StrokePath, StrokeLineBounds>>()
+    private val strokeGeometryByDocument = mutableMapOf<Document, MutableMap<StrokePath, StrokeGeometryContent>>()
     private val undoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
     private val redoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
 
@@ -301,6 +303,7 @@ class DrawingCanvasPanel(
         saveStateForUndo()
         strokesByDocument[document] = mutableListOf()
         strokeBoundsByDocument[document] = mutableMapOf()
+        strokeGeometryByDocument[document] = mutableMapOf()
         currentStroke = null
         shapePreview = null
         persistCurrentStrokes()
@@ -317,6 +320,7 @@ class DrawingCanvasPanel(
         val restored = undo.removeAt(undo.lastIndex)
         strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
         rebuildStrokeBounds(document)
+        resetStrokeGeometryCache(document)
         persistCurrentStrokes()
         refreshHistoryState()
         repaint()
@@ -331,6 +335,7 @@ class DrawingCanvasPanel(
         val restored = redo.removeAt(redo.lastIndex)
         strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
         rebuildStrokeBounds(document)
+        resetStrokeGeometryCache(document)
         persistCurrentStrokes()
         refreshHistoryState()
         repaint()
@@ -356,6 +361,7 @@ class DrawingCanvasPanel(
             override fun documentChanged(event: DocumentEvent) {
                 remapAnchorsForDocumentChange(document, event)
                 rebuildStrokeBounds(document)
+                resetStrokeGeometryCache(document)
                 persistCurrentStrokes()
                 repaint()
             }
@@ -383,6 +389,11 @@ class DrawingCanvasPanel(
         return strokeBoundsByDocument.getOrPut(document) { mutableMapOf() }
     }
 
+    private fun currentStrokeGeometries(): MutableMap<StrokePath, StrokeGeometryContent> {
+        val document = editor?.document ?: return mutableMapOf()
+        return strokeGeometryByDocument.getOrPut(document) { mutableMapOf() }
+    }
+
     private fun snapshotCurrentStrokes(): List<StrokePath> = currentStrokes().map { it.deepCopy() }
 
     private fun saveStateForUndo() {
@@ -401,6 +412,7 @@ class DrawingCanvasPanel(
     private fun addStrokeToCurrentDocument(stroke: StrokePath) {
         currentStrokes().add(stroke)
         updateStrokeBounds(stroke)
+        invalidateStrokeGeometry(stroke)
     }
 
     private fun rebuildStrokeBounds(document: Document) {
@@ -444,6 +456,14 @@ class DrawingCanvasPanel(
         }
     }
 
+    private fun invalidateStrokeGeometry(stroke: StrokePath) {
+        currentStrokeGeometries().remove(stroke)
+    }
+
+    private fun resetStrokeGeometryCache(document: Document) {
+        strokeGeometryByDocument[document] = mutableMapOf()
+    }
+
     private fun loadPersistedStrokes() {
         val editor = editor ?: return
         val document = editor.document
@@ -481,6 +501,7 @@ class DrawingCanvasPanel(
         }.toMutableList()
         strokesByDocument[document] = loaded
         rebuildStrokeBounds(document)
+        resetStrokeGeometryCache(document)
     }
 
     private fun persistCurrentStrokes() {
@@ -518,6 +539,7 @@ class DrawingCanvasPanel(
         )
         strokesByDocument[document] = erased.toMutableList()
         rebuildStrokeBounds(document)
+        resetStrokeGeometryCache(document)
     }
 
     private fun buildEraseSamples(from: Point, to: Point): List<Point> {
@@ -569,6 +591,7 @@ class DrawingCanvasPanel(
         }
         stroke.points += anchor
         expandStrokeBoundsWithAnchor(stroke, anchor)
+        invalidateStrokeGeometry(stroke)
     }
 
     private fun simplifyFreehandStrokeInPlace(stroke: StrokePath) {
@@ -581,6 +604,7 @@ class DrawingCanvasPanel(
             stroke.points.clear()
             stroke.points.addAll(simplified)
             updateStrokeBounds(stroke)
+            invalidateStrokeGeometry(stroke)
         }
     }
 
@@ -670,6 +694,11 @@ class DrawingCanvasPanel(
         val maxLine: Int
     )
 
+    private data class StrokeGeometryContent(
+        val path: Path2D.Float?,
+        val polygon: Polygon?
+    )
+
     private fun resolveLineInfo(editorPoint: Point): LineInfo? {
         val editor = editor ?: return null
         val document = editor.document
@@ -719,7 +748,7 @@ class DrawingCanvasPanel(
         )
     }
 
-    private fun toViewPoint(anchor: AnchorPoint): Point? {
+    private fun toContentPoint(anchor: AnchorPoint): Point? {
         val editor = editor ?: return null
         val document = editor.document
         normalizeAnchor(document, anchor)
@@ -730,12 +759,16 @@ class DrawingCanvasPanel(
         val lineBase = editor.logicalPositionToXY(LogicalPosition(safeLine, 0))
         val lineEndPoint = editor.logicalPositionToXY(lineEndLogical)
 
-        val editorPoint = Point(
+        return Point(
             max(lineEndPoint.x, lineBase.x) + max(anchor.dx, minCodeClearancePx),
             lineBase.y + anchor.dy
         )
+    }
 
-        return SwingUtilities.convertPoint(editor.contentComponent, editorPoint, this)
+    private fun toViewPoint(anchor: AnchorPoint): Point? {
+        val editor = editor ?: return null
+        val contentPoint = toContentPoint(anchor) ?: return null
+        return SwingUtilities.convertPoint(editor.contentComponent, contentPoint, this)
     }
 
     private fun convertViewStrokeToAnchors(stroke: StrokePath): StrokePath {
@@ -751,6 +784,36 @@ class DrawingCanvasPanel(
             filled = stroke.filled,
             kind = stroke.kind
         )
+    }
+
+    private fun buildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
+        val contentPoints = stroke.points.mapNotNull(::toContentPoint)
+        if (contentPoints.isEmpty()) return null
+
+        return if (stroke.filled) {
+            if (contentPoints.size < 3) return null
+            val polygon = Polygon()
+            contentPoints.forEach { polygon.addPoint(it.x, it.y) }
+            StrokeGeometryContent(path = null, polygon = polygon)
+        } else {
+            if (contentPoints.size < 2) return null
+            val path = if (stroke.kind == null) {
+                buildSmoothFreehandPath(contentPoints)
+            } else {
+                buildPolylinePath(contentPoints)
+            }
+            StrokeGeometryContent(path = path, polygon = null)
+        }
+    }
+
+    private fun getOrBuildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
+        val cache = currentStrokeGeometries()
+        val cached = cache[stroke]
+        if (cached != null) return cached
+
+        val built = buildStrokeGeometryContent(stroke) ?: return null
+        cache[stroke] = built
+        return built
     }
 
     private fun remapAnchorsForDocumentChange(document: Document, event: DocumentEvent) {
@@ -1074,10 +1137,14 @@ class DrawingCanvasPanel(
         val visibleLineRange = resolveVisibleLineRange(clip)
         val boundsMap = currentStrokeBounds()
 
+        val contentOrigin = SwingUtilities.convertPoint(editor.contentComponent, Point(0, 0), this)
+        val gContent = g.create() as Graphics2D
+        gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
+
         for (stroke in currentStrokes()) {
-            val bounds = boundsMap[stroke] ?: computeStrokeLineBounds(stroke)
+            val bounds = boundsMap[stroke] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke] = it }
             if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
-                paintStroke(g, stroke)
+                paintStroke(gContent, stroke)
             }
         }
 
@@ -1087,9 +1154,11 @@ class DrawingCanvasPanel(
                 previewBounds.maxLine >= visibleLineRange.first &&
                 previewBounds.minLine <= visibleLineRange.second
             ) {
-                paintStroke(g, it, preview = true)
+                paintStroke(gContent, it, preview = true)
             }
         }
+
+        gContent.dispose()
     }
 
     private fun resolveVisibleLineRange(clip: Rectangle): Pair<Int, Int> {
@@ -1154,11 +1223,14 @@ class DrawingCanvasPanel(
 
         g.color = alphaColor
 
-        val points = stroke.points.mapNotNull(::toViewPoint)
-        if (points.size < 2) return
+        val geometry = if (preview) {
+            buildStrokeGeometryContent(stroke)
+        } else {
+            getOrBuildStrokeGeometryContent(stroke)
+        } ?: return
 
         if (stroke.filled) {
-            val polygon = PaintGeometryEngine.buildPolygon(stroke, ::toViewPoint) ?: return
+            val polygon = geometry.polygon ?: return
             g.fillPolygon(polygon)
             g.color = Color(alphaColor.red, alphaColor.green, alphaColor.blue, 220)
             g.stroke = BasicStroke(
@@ -1187,13 +1259,7 @@ class DrawingCanvasPanel(
             )
         }
 
-        val path = if (stroke.kind == null) {
-            buildSmoothFreehandPath(points)
-        } else {
-            buildPolylinePath(points)
-        }
-
-        g.draw(path)
+        geometry.path?.let { g.draw(it) }
     }
 
     private fun buildPolylinePath(points: List<Point>): Path2D.Float {
