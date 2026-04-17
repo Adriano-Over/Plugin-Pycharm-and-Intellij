@@ -485,11 +485,6 @@ class DrawingCanvasPanel(
 
     private fun persistCurrentStrokes() {
         val filePath = currentFile?.path ?: return
-        val document = editor?.document ?: return
-        currentStrokes().forEach { stroke ->
-            stroke.points.forEach { point -> normalizeAnchor(document, point) }
-        }
-        rebuildStrokeBounds(document)
         val stateService = project.service<FloatBarDrawingStateService>()
         val saved = currentStrokes().map { stroke ->
             SavedStroke(
