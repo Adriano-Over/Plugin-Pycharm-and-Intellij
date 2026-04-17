@@ -44,6 +44,7 @@ class DrawingCanvasPanel(
     private var currentFile: VirtualFile? = null
 
     private val strokesByDocument = mutableMapOf<Document, MutableList<StrokePath>>()
+    private val strokeBoundsByDocument = mutableMapOf<Document, MutableMap<StrokePath, StrokeLineBounds>>()
     private val undoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
     private val redoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
 
@@ -95,9 +96,9 @@ class DrawingCanvasPanel(
                             toViewPoint = ::toViewPoint
                         )
                         if (filledStrokes.isNotEmpty()) {
-                            currentStrokes().addAll(
-                                filledStrokes.map { convertViewStrokeToAnchors(it) }
-                            )
+                            for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
+                                addStrokeToCurrentDocument(stroke)
+                            }
                             persistCurrentStrokes()
                             refreshHistoryState()
                             repaint()
@@ -126,7 +127,7 @@ class DrawingCanvasPanel(
                         saveStateForUndo()
                         val stroke = StrokePath(color = drawColor, width = 3.5f)
                         currentStroke = stroke
-                        currentStrokes().add(stroke)
+                        addStrokeToCurrentDocument(stroke)
                         addAnchorPoint(stroke, safePoint)
                         lastDragPoint = safePoint
                         repaintAround(listOf(safePoint))
@@ -200,7 +201,8 @@ class DrawingCanvasPanel(
                     FloatBarToolMode.SHAPES -> {
                         val preview = shapePreview
                         if (preview != null && preview.points.size >= 2) {
-                            currentStrokes().add(preview.deepCopy())
+                            val committed = preview.deepCopy()
+                            addStrokeToCurrentDocument(committed)
                             persistCurrentStrokes()
                             refreshHistoryState()
                         }
@@ -298,6 +300,7 @@ class DrawingCanvasPanel(
         val document = editor?.document ?: return
         saveStateForUndo()
         strokesByDocument[document] = mutableListOf()
+        strokeBoundsByDocument[document] = mutableMapOf()
         currentStroke = null
         shapePreview = null
         persistCurrentStrokes()
@@ -313,6 +316,7 @@ class DrawingCanvasPanel(
         redo += snapshotCurrentStrokes()
         val restored = undo.removeAt(undo.lastIndex)
         strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
+        rebuildStrokeBounds(document)
         persistCurrentStrokes()
         refreshHistoryState()
         repaint()
@@ -326,6 +330,7 @@ class DrawingCanvasPanel(
         undo += snapshotCurrentStrokes()
         val restored = redo.removeAt(redo.lastIndex)
         strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
+        rebuildStrokeBounds(document)
         persistCurrentStrokes()
         refreshHistoryState()
         repaint()
@@ -350,6 +355,7 @@ class DrawingCanvasPanel(
         val listener = object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
                 remapAnchorsForDocumentChange(document, event)
+                rebuildStrokeBounds(document)
                 persistCurrentStrokes()
                 repaint()
             }
@@ -372,6 +378,11 @@ class DrawingCanvasPanel(
         return strokesByDocument.getOrPut(document) { mutableListOf() }
     }
 
+    private fun currentStrokeBounds(): MutableMap<StrokePath, StrokeLineBounds> {
+        val document = editor?.document ?: return mutableMapOf()
+        return strokeBoundsByDocument.getOrPut(document) { mutableMapOf() }
+    }
+
     private fun snapshotCurrentStrokes(): List<StrokePath> = currentStrokes().map { it.deepCopy() }
 
     private fun saveStateForUndo() {
@@ -385,6 +396,52 @@ class DrawingCanvasPanel(
 
     private fun refreshHistoryState() {
         onHistoryChanged(canUndo(), canRedo())
+    }
+
+    private fun addStrokeToCurrentDocument(stroke: StrokePath) {
+        currentStrokes().add(stroke)
+        updateStrokeBounds(stroke)
+    }
+
+    private fun rebuildStrokeBounds(document: Document) {
+        val strokes = strokesByDocument[document] ?: mutableListOf()
+        val rebuilt = mutableMapOf<StrokePath, StrokeLineBounds>()
+        for (stroke in strokes) {
+            computeStrokeLineBounds(stroke)?.let { rebuilt[stroke] = it }
+        }
+        strokeBoundsByDocument[document] = rebuilt
+    }
+
+    private fun computeStrokeLineBounds(stroke: StrokePath): StrokeLineBounds? {
+        if (stroke.points.isEmpty()) return null
+
+        var minLine = Int.MAX_VALUE
+        var maxLine = Int.MIN_VALUE
+
+        for (point in stroke.points) {
+            minLine = min(minLine, point.line)
+            maxLine = max(maxLine, point.line)
+        }
+
+        return if (minLine == Int.MAX_VALUE) null else StrokeLineBounds(minLine, maxLine)
+    }
+
+    private fun updateStrokeBounds(stroke: StrokePath) {
+        val bounds = computeStrokeLineBounds(stroke) ?: return
+        currentStrokeBounds()[stroke] = bounds
+    }
+
+    private fun expandStrokeBoundsWithAnchor(stroke: StrokePath, anchor: AnchorPoint) {
+        val boundsMap = currentStrokeBounds()
+        val existing = boundsMap[stroke]
+        boundsMap[stroke] = if (existing == null) {
+            StrokeLineBounds(anchor.line, anchor.line)
+        } else {
+            StrokeLineBounds(
+                min(existing.minLine, anchor.line),
+                max(existing.maxLine, anchor.line)
+            )
+        }
     }
 
     private fun loadPersistedStrokes() {
@@ -423,6 +480,7 @@ class DrawingCanvasPanel(
             )
         }.toMutableList()
         strokesByDocument[document] = loaded
+        rebuildStrokeBounds(document)
     }
 
     private fun persistCurrentStrokes() {
@@ -431,6 +489,7 @@ class DrawingCanvasPanel(
         currentStrokes().forEach { stroke ->
             stroke.points.forEach { point -> normalizeAnchor(document, point) }
         }
+        rebuildStrokeBounds(document)
         val stateService = project.service<FloatBarDrawingStateService>()
         val saved = currentStrokes().map { stroke ->
             SavedStroke(
@@ -463,6 +522,7 @@ class DrawingCanvasPanel(
             toViewPoint = ::toViewPoint
         )
         strokesByDocument[document] = erased.toMutableList()
+        rebuildStrokeBounds(document)
     }
 
     private fun buildEraseSamples(from: Point, to: Point): List<Point> {
@@ -513,6 +573,7 @@ class DrawingCanvasPanel(
             return
         }
         stroke.points += anchor
+        expandStrokeBoundsWithAnchor(stroke, anchor)
     }
 
     private fun simplifyFreehandStrokeInPlace(stroke: StrokePath) {
@@ -524,6 +585,7 @@ class DrawingCanvasPanel(
         if (simplified.size >= 2 && simplified.size < stroke.points.size) {
             stroke.points.clear()
             stroke.points.addAll(simplified)
+            updateStrokeBounds(stroke)
         }
     }
 
@@ -606,6 +668,11 @@ class DrawingCanvasPanel(
         val lineBaseX: Int,
         val lineBaseY: Int,
         val lineEndX: Int
+    )
+
+    private data class StrokeLineBounds(
+        val minLine: Int,
+        val maxLine: Int
     )
 
     private fun resolveLineInfo(editorPoint: Point): LineInfo? {
@@ -1002,23 +1069,29 @@ class DrawingCanvasPanel(
         val g = graphics as Graphics2D
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
+        val clip = g.clipBounds ?: Rectangle(0, 0, width, height)
         val lineHeight = editor.lineHeight.takeIf { it > 0 } ?: 16
 
         if (gridEnabled) {
-            paintGridWithEdge(g, lineHeight)
+            paintGridWithEdge(g, lineHeight, clip)
         }
 
-        val clip = g.clipBounds ?: Rectangle(0, 0, width, height)
         val visibleLineRange = resolveVisibleLineRange(clip)
+        val boundsMap = currentStrokeBounds()
 
         for (stroke in currentStrokes()) {
-            if (strokeMayIntersectVisibleLines(stroke, visibleLineRange.first, visibleLineRange.second)) {
+            val bounds = boundsMap[stroke] ?: computeStrokeLineBounds(stroke)
+            if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
                 paintStroke(g, stroke)
             }
         }
 
         shapePreview?.let {
-            if (strokeMayIntersectVisibleLines(it, visibleLineRange.first, visibleLineRange.second)) {
+            val previewBounds = computeStrokeLineBounds(it)
+            if (previewBounds != null &&
+                previewBounds.maxLine >= visibleLineRange.first &&
+                previewBounds.minLine <= visibleLineRange.second
+            ) {
                 paintStroke(g, it, preview = true)
             }
         }
@@ -1042,52 +1115,39 @@ class DrawingCanvasPanel(
         return (topLine - 2).coerceAtLeast(0) to (bottomLine + 2).coerceAtMost(document.lineCount - 1)
     }
 
-    private fun strokeMayIntersectVisibleLines(stroke: StrokePath, visibleTopLine: Int, visibleBottomLine: Int): Boolean {
-        if (stroke.points.isEmpty()) return false
-
-        var minLine = Int.MAX_VALUE
-        var maxLine = Int.MIN_VALUE
-
-        for (point in stroke.points) {
-            minLine = min(minLine, point.line)
-            maxLine = max(maxLine, point.line)
-            if (minLine <= visibleBottomLine && maxLine >= visibleTopLine) {
-                // keep scanning until bounds are meaningful, but early condition is cheap
-            }
-        }
-
-        if (minLine == Int.MAX_VALUE) return false
-        return maxLine >= visibleTopLine && minLine <= visibleBottomLine
-    }
-
-    private fun paintGridWithEdge(g: Graphics2D, cellSize: Int) {
+    private fun paintGridWithEdge(g: Graphics2D, cellSize: Int, clip: Rectangle) {
         val startX = -gridExtendLeftPx
         val major = Color(255, 255, 255, 20)
         val minor = Color(255, 255, 255, 9)
 
-        var col = 0
-        var x = startX
-        while (x <= width + canvasPadding) {
-            g.color = if (col % 2 == 0) major else minor
-            g.drawLine(x, -canvasPadding, x, height + canvasPadding)
-            col++
+        val minGridX = (((clip.x - startX) / cellSize) - 1) * cellSize + startX
+        val maxGridX = clip.x + clip.width + cellSize
+        val minGridY = ((clip.y / cellSize) - 1) * cellSize
+        val maxGridY = clip.y + clip.height + cellSize
+
+        var colIndex = ((minGridX - startX) / cellSize)
+        var x = minGridX
+        while (x <= maxGridX) {
+            g.color = if (colIndex % 2 == 0) major else minor
+            g.drawLine(x, clip.y - canvasPadding, x, clip.y + clip.height + canvasPadding)
+            colIndex++
             x += cellSize
         }
 
-        var row = 0
-        var y = -canvasPadding
-        while (y <= height + canvasPadding) {
-            g.color = if (row % 2 == 0) major else minor
-            g.drawLine(startX, y, width + canvasPadding, y)
-            row++
+        var rowIndex = (minGridY / cellSize)
+        var y = minGridY
+        while (y <= maxGridY) {
+            g.color = if (rowIndex % 2 == 0) major else minor
+            g.drawLine(clip.x - canvasPadding, y, clip.x + clip.width + canvasPadding, y)
+            rowIndex++
             y += cellSize
         }
 
         g.color = major
-        g.drawLine(0, 0, width - 1, 0)
-        g.drawLine(0, height - 1, width - 1, height - 1)
-        g.drawLine(0, 0, 0, height - 1)
-        g.drawLine(width - 1, 0, width - 1, height - 1)
+        if (clip.y <= 0) g.drawLine(0, 0, width - 1, 0)
+        if (clip.y + clip.height >= height - 1) g.drawLine(0, height - 1, width - 1, height - 1)
+        if (clip.x <= 0) g.drawLine(0, 0, 0, height - 1)
+        if (clip.x + clip.width >= width - 1) g.drawLine(width - 1, 0, width - 1, height - 1)
     }
 
     private fun paintStroke(g: Graphics2D, stroke: StrokePath, preview: Boolean = false) {
