@@ -531,15 +531,72 @@ class DrawingCanvasPanel(
     private fun applyErasePath(points: List<Point>) {
         if (points.isEmpty()) return
         val document = editor?.document ?: return
-        val erased = PaintGeometryEngine.eraseAlongPath(
-            strokes = currentStrokes(),
+
+        val allStrokes = currentStrokes()
+        if (allStrokes.isEmpty()) return
+
+        val candidateRange = computeEraseCandidateLineRange(points)
+        val boundsMap = currentStrokeBounds()
+
+        val untouched = mutableListOf<StrokePath>()
+        val candidates = mutableListOf<StrokePath>()
+
+        for (stroke in allStrokes) {
+            val bounds = boundsMap[stroke] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke] = it }
+            if (bounds == null) {
+                untouched += stroke
+                continue
+            }
+
+            val intersectsLineRange =
+                bounds.maxLine >= candidateRange.first && bounds.minLine <= candidateRange.second
+
+            if (intersectsLineRange) {
+                candidates += stroke
+            } else {
+                untouched += stroke
+            }
+        }
+
+        if (candidates.isEmpty()) return
+
+        val erasedCandidates = PaintGeometryEngine.eraseAlongPath(
+            strokes = candidates,
             localPoints = points,
             radius = eraseRadius,
             toViewPoint = ::toViewPoint
         )
-        strokesByDocument[document] = erased.toMutableList()
+
+        val merged = ArrayList<StrokePath>(untouched.size + erasedCandidates.size)
+        merged.addAll(untouched)
+        merged.addAll(erasedCandidates)
+
+        strokesByDocument[document] = merged
         rebuildStrokeBounds(document)
         resetStrokeGeometryCache(document)
+    }
+
+    private fun computeEraseCandidateLineRange(points: List<Point>): Pair<Int, Int> {
+        val editor = editor ?: return 0 to Int.MAX_VALUE
+        val document = editor.document
+        if (document.lineCount <= 0 || points.isEmpty()) return 0 to 0
+
+        var minLine = Int.MAX_VALUE
+        var maxLine = Int.MIN_VALUE
+
+        for (point in points) {
+            val clamped = clampPointToDrawableArea(point) ?: continue
+            val editorPoint = SwingUtilities.convertPoint(this, clamped, editor.contentComponent)
+            val lineInfo = resolveLineInfo(editorPoint) ?: continue
+            minLine = min(minLine, lineInfo.line)
+            maxLine = max(maxLine, lineInfo.line)
+        }
+
+        if (minLine == Int.MAX_VALUE) return 0 to (document.lineCount - 1)
+
+        val linePadding = 2
+        return (minLine - linePadding).coerceAtLeast(0) to
+            (maxLine + linePadding).coerceAtMost(document.lineCount - 1)
     }
 
     private fun buildEraseSamples(from: Point, to: Point): List<Point> {
