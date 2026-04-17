@@ -39,25 +39,50 @@ object PaintGeometryEngine {
         if (localPoints.isEmpty()) return strokes.map { it.deepCopy() }.toMutableList()
 
         val rebuilt = mutableListOf<StrokePath>()
+        for (replacements in eraseAlongPathByStroke(strokes, localPoints, radius, toViewPoint).values) {
+            rebuilt += replacements
+        }
+        return rebuilt
+    }
+
+    fun eraseAlongPathByStroke(
+        strokes: List<StrokePath>,
+        localPoints: List<Point>,
+        radius: Double,
+        toViewPoint: (AnchorPoint) -> Point?
+    ): LinkedHashMap<Long, MutableList<StrokePath>> {
+        val rebuiltByStroke = LinkedHashMap<Long, MutableList<StrokePath>>()
+        if (localPoints.isEmpty()) {
+            for (stroke in strokes) {
+                rebuiltByStroke[stroke.id] = mutableListOf(stroke.deepCopy())
+            }
+            return rebuiltByStroke
+        }
+
         val eraserArea = buildEraserArea(localPoints, radius)
 
         for (stroke in strokes) {
-            if (stroke.points.isEmpty()) continue
-
-            if (stroke.filled) {
-                val area = buildArea(stroke, toViewPoint) ?: run {
-                    rebuilt += stroke.deepCopy()
-                    continue
-                }
-                area.subtract(eraserArea)
-                rebuilt += areaToFilledStrokes(area, stroke.color, stroke.width)
+            if (stroke.points.isEmpty()) {
+                rebuiltByStroke[stroke.id] = mutableListOf()
                 continue
             }
 
-            rebuilt += cutStrokeByEraserArea(stroke, eraserArea, toViewPoint)
+            val rebuilt = if (stroke.filled) {
+                val area = buildArea(stroke, toViewPoint)
+                if (area == null) {
+                    mutableListOf(stroke.deepCopy())
+                } else {
+                    area.subtract(eraserArea)
+                    areaToFilledStrokes(area, stroke.color, stroke.width)
+                }
+            } else {
+                cutStrokeByEraserArea(stroke, eraserArea, toViewPoint)
+            }
+
+            rebuiltByStroke[stroke.id] = rebuilt
         }
 
-        return rebuilt
+        return rebuiltByStroke
     }
 
     private fun buildEraserArea(points: List<Point>, radius: Double): Area {

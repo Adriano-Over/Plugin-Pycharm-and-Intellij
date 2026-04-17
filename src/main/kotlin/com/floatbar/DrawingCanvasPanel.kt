@@ -24,15 +24,13 @@ import java.awt.geom.Path2D
 import javax.swing.JDialog
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
-import kotlin.math.PI
+import javax.swing.Timer
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 class DrawingCanvasPanel(
     private val project: Project,
@@ -51,6 +49,9 @@ class DrawingCanvasPanel(
     private val redoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
 
     private var documentListener: DocumentListener? = null
+    private var persistenceTimer: Timer? = null
+
+    private val persistenceDebounceMs = 200
 
     private var currentStroke: StrokePath? = null
     private var currentTool = FloatBarToolMode.DRAW
@@ -101,7 +102,7 @@ class DrawingCanvasPanel(
                             for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
                                 addStrokeToCurrentDocument(stroke)
                             }
-                            persistCurrentStrokes()
+                            schedulePersistCurrentStrokes()
                             refreshHistoryState()
                             repaint()
                         }
@@ -195,7 +196,7 @@ class DrawingCanvasPanel(
                 when (currentTool) {
                     FloatBarToolMode.ERASE -> {
                         lastDragPoint = null
-                        persistCurrentStrokes()
+                        schedulePersistCurrentStrokes()
                         refreshHistoryState()
                         repaint()
                     }
@@ -205,7 +206,7 @@ class DrawingCanvasPanel(
                         if (preview != null && preview.points.size >= 2) {
                             val committed = preview.deepCopy()
                             addStrokeToCurrentDocument(committed)
-                            persistCurrentStrokes()
+                            schedulePersistCurrentStrokes()
                             refreshHistoryState()
                         }
                         shapeStartPoint = null
@@ -222,7 +223,7 @@ class DrawingCanvasPanel(
                         currentStroke?.let { simplifyFreehandStrokeInPlace(it) }
                         currentStroke = null
                         lastDragPoint = null
-                        persistCurrentStrokes()
+                        schedulePersistCurrentStrokes()
                         refreshHistoryState()
                     }
                 }
@@ -234,6 +235,7 @@ class DrawingCanvasPanel(
     }
 
     fun bindEditor(editor: Editor) {
+        persistCurrentStrokes()
         unbindDocumentListener()
         this.editor = editor
         this.currentFile = FileDocumentManager.getInstance().getFile(editor.document)
@@ -246,6 +248,7 @@ class DrawingCanvasPanel(
     }
 
     fun unbindEditor() {
+        persistCurrentStrokes()
         unbindDocumentListener()
         editor = null
         currentFile = null
@@ -362,7 +365,7 @@ class DrawingCanvasPanel(
                 remapAnchorsForDocumentChange(document, event)
                 rebuildStrokeBounds(document)
                 resetStrokeGeometryCache(document)
-                persistCurrentStrokes()
+                schedulePersistCurrentStrokes()
                 repaint()
             }
         }
@@ -464,6 +467,19 @@ class DrawingCanvasPanel(
         strokeGeometryByDocument[document] = mutableMapOf()
     }
 
+    private fun schedulePersistCurrentStrokes() {
+        val filePath = currentFile?.path ?: return
+        val timer = persistenceTimer ?: Timer(persistenceDebounceMs) {
+            persistCurrentStrokes()
+        }.also {
+            it.isRepeats = false
+            persistenceTimer = it
+        }
+
+        if (filePath.isEmpty()) return
+        timer.restart()
+    }
+
     private fun loadPersistedStrokes() {
         val editor = editor ?: return
         val document = editor.document
@@ -505,6 +521,8 @@ class DrawingCanvasPanel(
     }
 
     private fun persistCurrentStrokes() {
+        persistenceTimer?.stop()
+
         val filePath = currentFile?.path ?: return
         val stateService = project.service<FloatBarDrawingStateService>()
         val saved = currentStrokes().map { stroke ->
@@ -537,14 +555,13 @@ class DrawingCanvasPanel(
 
         val candidateRange = computeEraseCandidateLineRange(points)
         val boundsMap = currentStrokeBounds()
+        val geometryMap = currentStrokeGeometries()
 
-        val untouched = mutableListOf<StrokePath>()
         val candidates = mutableListOf<StrokePath>()
 
         for (stroke in allStrokes) {
             val bounds = boundsMap[stroke.id] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
             if (bounds == null) {
-                untouched += stroke
                 continue
             }
 
@@ -553,27 +570,46 @@ class DrawingCanvasPanel(
 
             if (intersectsLineRange) {
                 candidates += stroke
-            } else {
-                untouched += stroke
             }
         }
 
         if (candidates.isEmpty()) return
 
-        val erasedCandidates = PaintGeometryEngine.eraseAlongPath(
+        val rebuiltByStroke = PaintGeometryEngine.eraseAlongPathByStroke(
             strokes = candidates,
             localPoints = points,
             radius = eraseRadius,
             toViewPoint = ::toViewPoint
         )
 
-        val merged = ArrayList<StrokePath>(untouched.size + erasedCandidates.size)
-        merged.addAll(untouched)
-        merged.addAll(erasedCandidates)
+        if (rebuiltByStroke.isEmpty()) return
+
+        var replacementCount = 0
+        for (replacements in rebuiltByStroke.values) {
+            replacementCount += replacements.size
+        }
+
+        for (stroke in candidates) {
+            boundsMap.remove(stroke.id)
+            geometryMap.remove(stroke.id)
+        }
+
+        val merged = ArrayList<StrokePath>(allStrokes.size - candidates.size + replacementCount)
+        for (stroke in allStrokes) {
+            val replacements = rebuiltByStroke[stroke.id]
+            if (replacements == null) {
+                merged += stroke
+                continue
+            }
+
+            for (replacement in replacements) {
+                merged += replacement
+                computeStrokeLineBounds(replacement)?.let { boundsMap[replacement.id] = it }
+                geometryMap.remove(replacement.id)
+            }
+        }
 
         strokesByDocument[document] = merged
-        rebuildStrokeBounds(document)
-        resetStrokeGeometryCache(document)
     }
 
     private fun computeEraseCandidateLineRange(points: List<Point>): Pair<Int, Int> {
@@ -753,7 +789,8 @@ class DrawingCanvasPanel(
 
     private data class StrokeGeometryContent(
         val path: Path2D.Float?,
-        val polygon: Polygon?
+        val polygon: Polygon?,
+        val bounds: Rectangle
     )
 
     private fun resolveLineInfo(editorPoint: Point): LineInfo? {
@@ -847,11 +884,15 @@ class DrawingCanvasPanel(
         val contentPoints = stroke.points.mapNotNull(::toContentPoint)
         if (contentPoints.isEmpty()) return null
 
+        val boundsPadding = max(4, ceil(stroke.width.toDouble() / 2.0).toInt() + 2)
+
         return if (stroke.filled) {
             if (contentPoints.size < 3) return null
             val polygon = Polygon()
             contentPoints.forEach { polygon.addPoint(it.x, it.y) }
-            StrokeGeometryContent(path = null, polygon = polygon)
+            val bounds = Rectangle(polygon.bounds)
+            bounds.grow(boundsPadding, boundsPadding)
+            StrokeGeometryContent(path = null, polygon = polygon, bounds = bounds)
         } else {
             if (contentPoints.size < 2) return null
             val path = if (stroke.kind == null) {
@@ -859,7 +900,11 @@ class DrawingCanvasPanel(
             } else {
                 buildPolylinePath(contentPoints)
             }
-            StrokeGeometryContent(path = path, polygon = null)
+            StrokeGeometryContent(
+                path = path,
+                polygon = null,
+                bounds = computeGeometryBounds(contentPoints, boundsPadding)
+            )
         }
     }
 
@@ -871,6 +916,32 @@ class DrawingCanvasPanel(
         val built = buildStrokeGeometryContent(stroke) ?: return null
         cache[stroke.id] = built
         return built
+    }
+
+
+    private fun computeGeometryBounds(points: List<Point>, padding: Int): Rectangle {
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+
+        for (point in points) {
+            minX = min(minX, point.x)
+            minY = min(minY, point.y)
+            maxX = max(maxX, point.x)
+            maxY = max(maxY, point.y)
+        }
+
+        if (minX == Int.MAX_VALUE) {
+            return Rectangle()
+        }
+
+        return Rectangle(
+            minX - padding,
+            minY - padding,
+            (maxX - minX + padding * 2).coerceAtLeast(1),
+            (maxY - minY + padding * 2).coerceAtLeast(1)
+        )
     }
 
     private fun remapAnchorsForDocumentChange(document: Document, event: DocumentEvent) {
@@ -928,223 +999,17 @@ class DrawingCanvasPanel(
     }
 
     private fun buildShapeStroke(start: Point, end: Point, kind: ShapeKind, constrain: Boolean): StrokePath {
-        val adjusted = if (constrain) constrainPoint(start, end, kind) else end
-        val viewPoints = when (kind) {
-            ShapeKind.RECTANGLE, ShapeKind.PROCESS -> rectanglePoints(start, adjusted)
-            ShapeKind.ELLIPSE, ShapeKind.CONNECTOR -> ellipsePoints(start, adjusted)
-            ShapeKind.LINE -> linePoints(start, adjusted)
-            ShapeKind.ARROW -> arrowPoints(start, adjusted)
-            ShapeKind.DECISION -> diamondPoints(start, adjusted)
-            ShapeKind.START_END -> roundedRectApproxPoints(start, adjusted)
-            ShapeKind.INPUT_OUTPUT -> parallelogramPoints(start, adjusted)
-            ShapeKind.DOCUMENT -> documentPoints(start, adjusted)
-        }
-
-        val anchors = viewPoints.mapNotNull { viewPointToAnchor(it) }.toMutableList()
-        return StrokePath(
+        return ShapeStrokeFactory.buildShapeStroke(
+            start = start,
+            end = end,
+            kind = kind,
+            constrain = constrain,
             color = drawColor,
             width = 3.5f,
-            points = anchors,
-            filled = false,
-            kind = kind
+            shapeEdgeSpacing = shapeEdgeSpacing,
+            ellipseSegments = ellipseSegments,
+            toAnchor = ::viewPointToAnchor
         )
-    }
-
-    private fun constrainPoint(start: Point, end: Point, kind: ShapeKind): Point {
-        return when (kind) {
-            ShapeKind.LINE, ShapeKind.ARROW -> {
-                val dx = end.x - start.x
-                val dy = end.y - start.y
-                val angle = Math.atan2(dy.toDouble(), dx.toDouble())
-                val step = PI / 4.0
-                val snapped = kotlin.math.round(angle / step) * step
-                val length = hypot(dx.toDouble(), dy.toDouble())
-
-                Point(
-                    (start.x + cos(snapped) * length).roundToInt(),
-                    (start.y + sin(snapped) * length).roundToInt()
-                )
-            }
-
-            ShapeKind.RECTANGLE,
-            ShapeKind.ELLIPSE,
-            ShapeKind.PROCESS,
-            ShapeKind.CONNECTOR,
-            ShapeKind.DECISION,
-            ShapeKind.START_END -> {
-                val size = min(abs(end.x - start.x), abs(end.y - start.y))
-                Point(
-                    start.x + if (end.x >= start.x) size else -size,
-                    start.y + if (end.y >= start.y) size else -size
-                )
-            }
-
-            else -> end
-        }
-    }
-
-    private fun rectanglePoints(a: Point, b: Point): List<Point> {
-        val left = min(a.x, b.x)
-        val right = max(a.x, b.x)
-        val top = min(a.y, b.y)
-        val bottom = max(a.y, b.y)
-        return polyline(shapeEdgeSpacing,
-            Point(left, top),
-            Point(right, top),
-            Point(right, bottom),
-            Point(left, bottom),
-            Point(left, top)
-        )
-    }
-
-    private fun diamondPoints(a: Point, b: Point): List<Point> {
-        val left = min(a.x, b.x)
-        val right = max(a.x, b.x)
-        val top = min(a.y, b.y)
-        val bottom = max(a.y, b.y)
-        val cx = (left + right) / 2
-        val cy = (top + bottom) / 2
-        return polyline(shapeEdgeSpacing,
-            Point(cx, top),
-            Point(right, cy),
-            Point(cx, bottom),
-            Point(left, cy),
-            Point(cx, top)
-        )
-    }
-
-    private fun parallelogramPoints(a: Point, b: Point): List<Point> {
-        val left = min(a.x, b.x)
-        val right = max(a.x, b.x)
-        val top = min(a.y, b.y)
-        val bottom = max(a.y, b.y)
-        val slant = max(10, (right - left) / 6)
-        return polyline(shapeEdgeSpacing,
-            Point(left + slant, top),
-            Point(right, top),
-            Point(right - slant, bottom),
-            Point(left, bottom),
-            Point(left + slant, top)
-        )
-    }
-
-    private fun documentPoints(a: Point, b: Point): List<Point> {
-        val left = min(a.x, b.x)
-        val right = max(a.x, b.x)
-        val top = min(a.y, b.y)
-        val bottom = max(a.y, b.y)
-        val wave = max(8, (bottom - top) / 7)
-        return polyline(shapeEdgeSpacing,
-            Point(left, top),
-            Point(right, top),
-            Point(right, bottom - wave),
-            Point((left + right * 2) / 3, bottom),
-            Point((left * 2 + right) / 3, bottom - wave / 2),
-            Point(left, bottom - wave),
-            Point(left, top)
-        )
-    }
-
-    private fun roundedRectApproxPoints(a: Point, b: Point): List<Point> {
-        val left = min(a.x, b.x)
-        val right = max(a.x, b.x)
-        val top = min(a.y, b.y)
-        val bottom = max(a.y, b.y)
-        val r = max(8, min((right - left) / 4, (bottom - top) / 2))
-        return polyline(shapeEdgeSpacing,
-            Point(left + r, top),
-            Point(right - r, top),
-            Point(right, top + r),
-            Point(right, bottom - r),
-            Point(right - r, bottom),
-            Point(left + r, bottom),
-            Point(left, bottom - r),
-            Point(left, top + r),
-            Point(left + r, top)
-        )
-    }
-
-    private fun ellipsePoints(a: Point, b: Point): List<Point> {
-        val left = min(a.x, b.x)
-        val right = max(a.x, b.x)
-        val top = min(a.y, b.y)
-        val bottom = max(a.y, b.y)
-        val cx = (left + right) / 2.0
-        val cy = (top + bottom) / 2.0
-        val rx = max(1.0, (right - left) / 2.0)
-        val ry = max(1.0, (bottom - top) / 2.0)
-
-        return (0..ellipseSegments).map { i ->
-            val t = (PI * 2.0) * i / ellipseSegments.toDouble()
-            Point(
-                (cx + cos(t) * rx).roundToInt(),
-                (cy + sin(t) * ry).roundToInt()
-            )
-        }
-    }
-
-    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, shapeEdgeSpacing)
-
-    private fun arrowPoints(a: Point, b: Point): List<Point> {
-        val dx = (b.x - a.x).toDouble()
-        val dy = (b.y - a.y).toDouble()
-        val length = max(1.0, hypot(dx, dy))
-        val ux = dx / length
-        val uy = dy / length
-        val head = min(18.0, length / 3.0)
-        val wingX = -uy
-        val wingY = ux
-
-        val tipLeft = Point(
-            (b.x - ux * head + wingX * head * 0.6).roundToInt(),
-            (b.y - uy * head + wingY * head * 0.6).roundToInt()
-        )
-
-        val tipRight = Point(
-            (b.x - ux * head - wingX * head * 0.6).roundToInt(),
-            (b.y - uy * head - wingY * head * 0.6).roundToInt()
-        )
-
-        val shaftEnd = Point(
-            (b.x - ux * (head * 0.35)).roundToInt(),
-            (b.y - uy * (head * 0.35)).roundToInt()
-        )
-
-        return polyline(shapeEdgeSpacing,
-            *interpolateLine(a, shaftEnd, shapeEdgeSpacing).toTypedArray(),
-            *interpolateLine(tipLeft, b, shapeEdgeSpacing).toTypedArray(),
-            *interpolateLine(b, tipRight, shapeEdgeSpacing).toTypedArray()
-        )
-    }
-
-    private fun polyline(vararg points: Point): List<Point> {
-        return polyline(2.0, *points)
-    }
-
-    private fun polyline(spacing: Double, vararg points: Point): List<Point> {
-        if (points.isEmpty()) return emptyList()
-        val result = mutableListOf<Point>()
-        for (i in 0 until points.lastIndex) {
-            val segment = interpolateLine(points[i], points[i + 1], spacing)
-            if (result.isNotEmpty() && segment.isNotEmpty()) {
-                result.removeAt(result.lastIndex)
-            }
-            result += segment
-        }
-        return result
-    }
-
-    private fun interpolateLine(a: Point, b: Point, spacing: Double): List<Point> {
-        val distance = a.distance(b)
-        val steps = max(1, ceil(distance / spacing).toInt())
-
-        return (0..steps).map { i ->
-            val t = i.toDouble() / steps
-            Point(
-                (a.x + (b.x - a.x) * t).roundToInt(),
-                (a.y + (b.y - a.y) * t).roundToInt()
-            )
-        }
     }
 
     private fun repaintAround(points: List<Point>, padding: Int = dirtyPaddingPx) {
@@ -1195,13 +1060,19 @@ class DrawingCanvasPanel(
         val boundsMap = currentStrokeBounds()
 
         val contentOrigin = SwingUtilities.convertPoint(editor.contentComponent, Point(0, 0), this)
+        val contentClip = Rectangle(
+            clip.x - contentOrigin.x,
+            clip.y - contentOrigin.y,
+            clip.width,
+            clip.height
+        )
         val gContent = g.create() as Graphics2D
         gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
 
         for (stroke in currentStrokes()) {
             val bounds = boundsMap[stroke.id] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
             if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
-                paintStroke(gContent, stroke)
+                paintStroke(gContent, stroke, visibleContentClip = contentClip)
             }
         }
 
@@ -1211,7 +1082,7 @@ class DrawingCanvasPanel(
                 previewBounds.maxLine >= visibleLineRange.first &&
                 previewBounds.minLine <= visibleLineRange.second
             ) {
-                paintStroke(gContent, it, preview = true)
+                paintStroke(gContent, it, preview = true, visibleContentClip = contentClip)
             }
         }
 
@@ -1271,7 +1142,12 @@ class DrawingCanvasPanel(
         if (clip.x + clip.width >= width - 1) g.drawLine(width - 1, 0, width - 1, height - 1)
     }
 
-    private fun paintStroke(g: Graphics2D, stroke: StrokePath, preview: Boolean = false) {
+    private fun paintStroke(
+        g: Graphics2D,
+        stroke: StrokePath,
+        preview: Boolean = false,
+        visibleContentClip: Rectangle? = null
+    ) {
         val alphaColor = if (preview) {
             Color(stroke.color.red, stroke.color.green, stroke.color.blue, 140)
         } else {
@@ -1285,6 +1161,10 @@ class DrawingCanvasPanel(
         } else {
             getOrBuildStrokeGeometryContent(stroke)
         } ?: return
+
+        if (visibleContentClip != null && !geometry.bounds.intersects(visibleContentClip)) {
+            return
+        }
 
         if (stroke.filled) {
             val polygon = geometry.polygon ?: return
