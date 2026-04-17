@@ -66,8 +66,10 @@ class DrawingCanvasPanel(
     private val dirtyPaddingPx = 28
     private val eraseMinMovePx = 2.0
 
-    private val shapeEdgeSpacing = 6.0
-    private val ellipseSegments = 36
+    // Freehand-only simplification. Small tolerance keeps the current look nearly identical
+    // while reducing stored points after each completed stroke.
+    private val freehandSimplifyTolerancePx = 1.35
+    private val freehandSimplifyMinPoints = 10
 
     init {
         isOpaque = false
@@ -212,6 +214,7 @@ class DrawingCanvasPanel(
                     }
 
                     else -> {
+                        currentStroke?.let { simplifyFreehandStrokeInPlace(it) }
                         currentStroke = null
                         lastDragPoint = null
                         persistCurrentStrokes()
@@ -511,6 +514,94 @@ class DrawingCanvasPanel(
         stroke.points += anchor
     }
 
+    private fun simplifyFreehandStrokeInPlace(stroke: StrokePath) {
+        if (stroke.kind != null) return
+        if (stroke.filled) return
+        if (stroke.points.size < freehandSimplifyMinPoints) return
+
+        val simplified = simplifyFreehandAnchors(stroke.points, freehandSimplifyTolerancePx)
+        if (simplified.size >= 2 && simplified.size < stroke.points.size) {
+            stroke.points.clear()
+            stroke.points.addAll(simplified)
+        }
+    }
+
+    private fun simplifyFreehandAnchors(
+        points: List<AnchorPoint>,
+        tolerancePx: Double
+    ): MutableList<AnchorPoint> {
+        if (points.size < 3) {
+            return points.map { it.copy() }.toMutableList()
+        }
+
+        val resolved = ArrayList<Pair<AnchorPoint, Point>>(points.size)
+        for (anchor in points) {
+            val view = toViewPoint(anchor) ?: return points.map { it.copy() }.toMutableList()
+            resolved += anchor.copy() to view
+        }
+
+        val keep = BooleanArray(resolved.size)
+        keep[0] = true
+        keep[resolved.lastIndex] = true
+
+        simplifySegmentRdp(resolved, 0, resolved.lastIndex, tolerancePx, keep)
+
+        val result = mutableListOf<AnchorPoint>()
+        for (i in resolved.indices) {
+            if (keep[i]) {
+                result += resolved[i].first
+            }
+        }
+
+        return if (result.size >= 2) result else points.map { it.copy() }.toMutableList()
+    }
+
+    private fun simplifySegmentRdp(
+        points: List<Pair<AnchorPoint, Point>>,
+        start: Int,
+        end: Int,
+        tolerancePx: Double,
+        keep: BooleanArray
+    ) {
+        if (end <= start + 1) return
+
+        val a = points[start].second
+        val b = points[end].second
+
+        var maxDistance = -1.0
+        var maxIndex = -1
+
+        for (i in start + 1 until end) {
+            val p = points[i].second
+            val distance = perpendicularDistance(p, a, b)
+            if (distance > maxDistance) {
+                maxDistance = distance
+                maxIndex = i
+            }
+        }
+
+        if (maxIndex >= 0 && maxDistance > tolerancePx) {
+            keep[maxIndex] = true
+            simplifySegmentRdp(points, start, maxIndex, tolerancePx, keep)
+            simplifySegmentRdp(points, maxIndex, end, tolerancePx, keep)
+        }
+    }
+
+    private fun perpendicularDistance(p: Point, a: Point, b: Point): Double {
+        val dx = (b.x - a.x).toDouble()
+        val dy = (b.y - a.y).toDouble()
+
+        if (dx == 0.0 && dy == 0.0) {
+            return p.distance(a)
+        }
+
+        val t = (((p.x - a.x) * dx) + ((p.y - a.y) * dy)) / (dx * dx + dy * dy)
+        val clamped = t.coerceIn(0.0, 1.0)
+        val projX = a.x + clamped * dx
+        val projY = a.y + clamped * dy
+        return hypot(p.x - projX, p.y - projY)
+    }
+
     private data class LineInfo(
         val line: Int,
         val lineEndColumn: Int,
@@ -718,7 +809,7 @@ class DrawingCanvasPanel(
         val right = max(a.x, b.x)
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
-        return polyline(shapeEdgeSpacing,
+        return polyline(
             Point(left, top),
             Point(right, top),
             Point(right, bottom),
@@ -734,7 +825,7 @@ class DrawingCanvasPanel(
         val bottom = max(a.y, b.y)
         val cx = (left + right) / 2
         val cy = (top + bottom) / 2
-        return polyline(shapeEdgeSpacing,
+        return polyline(
             Point(cx, top),
             Point(right, cy),
             Point(cx, bottom),
@@ -749,7 +840,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val slant = max(10, (right - left) / 6)
-        return polyline(shapeEdgeSpacing,
+        return polyline(
             Point(left + slant, top),
             Point(right, top),
             Point(right - slant, bottom),
@@ -764,7 +855,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val wave = max(8, (bottom - top) / 7)
-        return polyline(shapeEdgeSpacing,
+        return polyline(
             Point(left, top),
             Point(right, top),
             Point(right, bottom - wave),
@@ -781,7 +872,7 @@ class DrawingCanvasPanel(
         val top = min(a.y, b.y)
         val bottom = max(a.y, b.y)
         val r = max(8, min((right - left) / 4, (bottom - top) / 2))
-        return polyline(shapeEdgeSpacing,
+        return polyline(
             Point(left + r, top),
             Point(right - r, top),
             Point(right, top + r),
@@ -804,8 +895,8 @@ class DrawingCanvasPanel(
         val rx = max(1.0, (right - left) / 2.0)
         val ry = max(1.0, (bottom - top) / 2.0)
 
-        return (0..ellipseSegments).map { i ->
-            val t = (PI * 2.0) * i / ellipseSegments.toDouble()
+        return (0..72).map { i ->
+            val t = (PI * 2.0) * i / 72.0
             Point(
                 (cx + cos(t) * rx).roundToInt(),
                 (cy + sin(t) * ry).roundToInt()
@@ -813,7 +904,7 @@ class DrawingCanvasPanel(
         }
     }
 
-    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, shapeEdgeSpacing)
+    private fun linePoints(a: Point, b: Point): List<Point> = interpolateLine(a, b, 2.0)
 
     private fun arrowPoints(a: Point, b: Point): List<Point> {
         val dx = (b.x - a.x).toDouble()
@@ -840,22 +931,18 @@ class DrawingCanvasPanel(
             (b.y - uy * (head * 0.35)).roundToInt()
         )
 
-        return polyline(shapeEdgeSpacing,
-            *interpolateLine(a, shaftEnd, shapeEdgeSpacing).toTypedArray(),
-            *interpolateLine(tipLeft, b, shapeEdgeSpacing).toTypedArray(),
-            *interpolateLine(b, tipRight, shapeEdgeSpacing).toTypedArray()
+        return polyline(
+            *interpolateLine(a, shaftEnd, 2.0).toTypedArray(),
+            *interpolateLine(tipLeft, b, 2.0).toTypedArray(),
+            *interpolateLine(b, tipRight, 2.0).toTypedArray()
         )
     }
 
     private fun polyline(vararg points: Point): List<Point> {
-        return polyline(2.0, *points)
-    }
-
-    private fun polyline(spacing: Double, vararg points: Point): List<Point> {
         if (points.isEmpty()) return emptyList()
         val result = mutableListOf<Point>()
         for (i in 0 until points.lastIndex) {
-            val segment = interpolateLine(points[i], points[i + 1], spacing)
+            val segment = interpolateLine(points[i], points[i + 1], 2.0)
             if (result.isNotEmpty() && segment.isNotEmpty()) {
                 result.removeAt(result.lastIndex)
             }
