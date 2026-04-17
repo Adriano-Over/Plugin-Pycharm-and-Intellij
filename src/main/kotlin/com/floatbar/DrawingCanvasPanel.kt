@@ -981,11 +981,62 @@ class DrawingCanvasPanel(
             BasicStroke.JOIN_ROUND
         )
 
+        val path = if (stroke.kind == null) {
+            buildSmoothFreehandPath(points)
+        } else {
+            buildPolylinePath(points)
+        }
+
+        g.draw(path)
+    }
+
+    private fun buildPolylinePath(points: List<Point>): Path2D.Float {
         val path = Path2D.Float()
         path.moveTo(points.first().x.toDouble(), points.first().y.toDouble())
         for (point in points.drop(1)) {
             path.lineTo(point.x.toDouble(), point.y.toDouble())
         }
-        g.draw(path)
+        return path
+    }
+
+    private fun buildSmoothFreehandPath(points: List<Point>): Path2D.Float {
+        val path = Path2D.Float()
+        if (points.isEmpty()) return path
+        if (points.size == 1) {
+            path.moveTo(points[0].x.toDouble(), points[0].y.toDouble())
+            path.lineTo(points[0].x.toDouble(), points[0].y.toDouble())
+            return path
+        }
+        if (points.size == 2) {
+            path.moveTo(points[0].x.toDouble(), points[0].y.toDouble())
+            path.lineTo(points[1].x.toDouble(), points[1].y.toDouble())
+            return path
+        }
+
+        path.moveTo(points[0].x.toDouble(), points[0].y.toDouble())
+
+        for (i in 1 until points.lastIndex) {
+            val current = points[i]
+            val next = points[i + 1]
+            val midX = (current.x + next.x) / 2.0
+            val midY = (current.y + next.y) / 2.0
+            path.quadTo(
+                current.x.toDouble(),
+                current.y.toDouble(),
+                midX,
+                midY
+            )
+        }
+
+        val penultimate = points[points.lastIndex - 1]
+        val last = points.last()
+        path.quadTo(
+            penultimate.x.toDouble(),
+            penultimate.y.toDouble(),
+            last.x.toDouble(),
+            last.y.toDouble()
+        )
+
+        return path
     }
 }
