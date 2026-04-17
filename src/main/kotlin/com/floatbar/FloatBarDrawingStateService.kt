@@ -7,8 +7,11 @@ import com.intellij.openapi.components.Storage
 
 data class SavedPoint(
     var line: Int = 0,
-    var x: Int = 0,
-    var dy: Int = 0
+    var column: Int = 0,
+    var dx: Int = 0,
+    var dy: Int = 0,
+    // Legacy field kept only so older XML can still deserialize.
+    var x: Int = 0
 )
 
 data class SavedStroke(
@@ -76,5 +79,3 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
         state.recentColors = colors.toMutableList()
     }
 }
-// this is a teste to GIT
-

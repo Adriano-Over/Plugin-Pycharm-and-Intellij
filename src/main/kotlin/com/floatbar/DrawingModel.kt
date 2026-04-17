@@ -2,9 +2,16 @@ package com.floatbar
 
 import java.awt.Color
 
+/**
+ * Document-anchored point.
+ *
+ * line/column identify the nearest logical document position.
+ * dx/dy are pixel offsets from editor.logicalPositionToXY(line, column).
+ */
 data class AnchorPoint(
     var line: Int,
-    var x: Int,
+    var column: Int,
+    var dx: Int,
     var dy: Int
 )
 

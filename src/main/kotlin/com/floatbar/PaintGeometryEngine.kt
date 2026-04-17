@@ -161,6 +161,11 @@ object PaintGeometryEngine {
     /**
      * Converts filled pixels into many short normal strokes.
      * This avoids a special fill object and keeps everything in the same drawing model.
+     *
+     * For these temporary view-space strokes:
+     * - dx stores view-space x
+     * - dy stores view-space y
+     * - line/column are unused placeholders until DrawingCanvasPanel converts them
      */
     private fun buildDenseFillStrokes(
         visited: Array<BooleanArray>,
@@ -188,8 +193,8 @@ object PaintGeometryEngine {
                             color = fillColor,
                             width = 2.0f,
                             points = mutableListOf(
-                                AnchorPoint(0, segStart + offsetX, y + offsetY),
-                                AnchorPoint(0, segEnd + offsetX, y + offsetY)
+                                AnchorPoint(0, 0, segStart + offsetX, y + offsetY),
+                                AnchorPoint(0, 0, segEnd + offsetX, y + offsetY)
                             ),
                             filled = false,
                             kind = null
@@ -266,10 +271,10 @@ object PaintGeometryEngine {
                     if (current.size >= 3) {
                         results += StrokePath(color = color, width = width, points = current, filled = true)
                     }
-                    current = mutableListOf(AnchorPoint(0, coords[0].toInt(), coords[1].toInt()))
+                    current = mutableListOf(AnchorPoint(0, 0, coords[0].toInt(), coords[1].toInt()))
                 }
                 PathIterator.SEG_LINETO -> {
-                    current += AnchorPoint(0, coords[0].toInt(), coords[1].toInt())
+                    current += AnchorPoint(0, 0, coords[0].toInt(), coords[1].toInt())
                 }
                 PathIterator.SEG_CLOSE -> {
                     if (current.size >= 3) {

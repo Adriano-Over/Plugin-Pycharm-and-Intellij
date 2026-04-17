@@ -3,6 +3,7 @@ package com.floatbar
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.fileEditor.FileDocumentManager
@@ -21,6 +22,7 @@ import java.awt.event.MouseEvent
 import java.awt.geom.Path2D
 import javax.swing.JDialog
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -307,23 +309,9 @@ class DrawingCanvasPanel(
     private fun bindDocumentListener(document: Document) {
         val listener = object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
-                val removedLines = event.oldFragment.count { it == '\n' }
-                val addedLines = event.newFragment.count { it == '\n' }
-                val delta = addedLines - removedLines
-                if (delta < 0) {
-                    val removeCount = -delta
-                    val startLine = document.getLineNumber(event.offset)
-                    val strokes = strokesByDocument[document] ?: return
-                    for (stroke in strokes) {
-                        for (point in stroke.points) {
-                            if (point.line > startLine) {
-                                point.line = max(startLine, point.line - removeCount)
-                            }
-                        }
-                    }
-                    persistCurrentStrokes()
-                    repaint()
-                }
+                // Step 1 only: stop mutating anchors based on viewport-relative line math.
+                // The next fix will introduce proper remapping across document edits.
+                repaint()
             }
         }
         document.addDocumentListener(listener)
@@ -368,7 +356,24 @@ class DrawingCanvasPanel(
                 color = Color(saved.color, true),
                 width = saved.width,
                 points = saved.points.map { point ->
-                    AnchorPoint(point.line, point.x, point.dy)
+                    val isNewFormat = point.column != 0 || point.dx != 0
+                    if (isNewFormat) {
+                        AnchorPoint(
+                            line = point.line,
+                            column = point.column,
+                            dx = point.dx,
+                            dy = point.dy
+                        )
+                    } else {
+                        // Best-effort legacy fallback. Old saved data was viewport-relative,
+                        // so users should clear the old persisted XML after this step.
+                        AnchorPoint(
+                            line = point.line,
+                            column = 0,
+                            dx = point.x,
+                            dy = point.dy
+                        )
+                    }
                 }.toMutableList(),
                 filled = saved.filled,
                 kind = saved.kind?.let { runCatching { ShapeKind.valueOf(it) }.getOrNull() }
@@ -385,7 +390,13 @@ class DrawingCanvasPanel(
                 color = stroke.color.rgb,
                 width = stroke.width,
                 points = stroke.points.map { point ->
-                    SavedPoint(line = point.line, x = point.x, dy = point.dy)
+                    SavedPoint(
+                        line = point.line,
+                        column = point.column,
+                        dx = point.dx,
+                        dy = point.dy,
+                        x = 0
+                    )
                 }.toMutableList(),
                 filled = stroke.filled,
                 kind = stroke.kind?.name
@@ -434,7 +445,12 @@ class DrawingCanvasPanel(
     private fun addAnchorPoint(stroke: StrokePath, point: Point) {
         val anchor = viewPointToAnchor(point) ?: return
         val last = stroke.points.lastOrNull()
-        if (last != null && last.line == anchor.line && abs(last.x - anchor.x) < 2 && abs(last.dy - anchor.dy) < 2) {
+        if (last != null &&
+            last.line == anchor.line &&
+            last.column == anchor.column &&
+            abs(last.dx - anchor.dx) < 2 &&
+            abs(last.dy - anchor.dy) < 2
+        ) {
             return
         }
         stroke.points += anchor
@@ -442,29 +458,32 @@ class DrawingCanvasPanel(
 
     private fun viewPointToAnchor(point: Point): AnchorPoint? {
         val editor = editor ?: return null
-        val lineHeight = editor.lineHeight.takeIf { it > 0 } ?: 16
-        val visibleLine = max(0, (point.y - canvasPadding) / lineHeight)
-        val line = max(0, visibleLine)
-        val dy = point.y - (canvasPadding + line * lineHeight)
+        val editorPoint = SwingUtilities.convertPoint(this, point, editor.contentComponent)
+        val logical = editor.xyToLogicalPosition(editorPoint)
+        val base = editor.logicalPositionToXY(logical)
 
         return AnchorPoint(
-            line = line,
-            x = point.x + canvasPadding,
-            dy = dy
+            line = logical.line,
+            column = logical.column,
+            dx = editorPoint.x - base.x,
+            dy = editorPoint.y - base.y
         )
     }
 
     private fun toViewPoint(anchor: AnchorPoint): Point? {
         val editor = editor ?: return null
-        val lineHeight = editor.lineHeight.takeIf { it > 0 } ?: 16
-        val line = anchor.line.coerceAtLeast(0)
-        val y = canvasPadding + line * lineHeight + anchor.dy
-        return Point(anchor.x - canvasPadding, y)
+        val logical = LogicalPosition(
+            anchor.line.coerceAtLeast(0),
+            anchor.column.coerceAtLeast(0)
+        )
+        val base = editor.logicalPositionToXY(logical)
+        val editorPoint = Point(base.x + anchor.dx, base.y + anchor.dy)
+        return SwingUtilities.convertPoint(editor.contentComponent, editorPoint, this)
     }
 
     private fun convertViewStrokeToAnchors(stroke: StrokePath): StrokePath {
         val converted = stroke.points.mapNotNull { source ->
-            val view = Point(source.x, source.dy)
+            val view = Point(source.dx, source.dy)
             viewPointToAnchor(view)
         }.toMutableList()
 
