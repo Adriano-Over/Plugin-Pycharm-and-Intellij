@@ -22,20 +22,28 @@ object PaintGeometryEngine {
         radius: Double,
         toViewPoint: (AnchorPoint) -> Point?
     ): MutableList<StrokePath> {
-        val rebuilt = mutableListOf<StrokePath>()
-        val eraserArea = Area(
-            Ellipse2D.Double(
-                localPoint.x - radius,
-                localPoint.y - radius,
-                radius * 2,
-                radius * 2
-            )
+        return eraseAlongPath(
+            strokes = strokes,
+            localPoints = listOf(localPoint),
+            radius = radius,
+            toViewPoint = toViewPoint
         )
+    }
+
+    fun eraseAlongPath(
+        strokes: List<StrokePath>,
+        localPoints: List<Point>,
+        radius: Double,
+        toViewPoint: (AnchorPoint) -> Point?
+    ): MutableList<StrokePath> {
+        if (localPoints.isEmpty()) return strokes.map { it.deepCopy() }.toMutableList()
+
+        val rebuilt = mutableListOf<StrokePath>()
+        val eraserArea = buildEraserArea(localPoints, radius)
 
         for (stroke in strokes) {
             if (stroke.points.isEmpty()) continue
 
-            // Legacy support for older saved polygon fills
             if (stroke.filled) {
                 val area = buildArea(stroke, toViewPoint) ?: run {
                     rebuilt += stroke.deepCopy()
@@ -46,10 +54,27 @@ object PaintGeometryEngine {
                 continue
             }
 
-            rebuilt += cutStrokeByEraser(stroke, localPoint, radius, toViewPoint)
+            rebuilt += cutStrokeByEraserArea(stroke, eraserArea, toViewPoint)
         }
 
         return rebuilt
+    }
+
+    private fun buildEraserArea(points: List<Point>, radius: Double): Area {
+        val area = Area()
+        for (point in points) {
+            area.add(
+                Area(
+                    Ellipse2D.Double(
+                        point.x - radius,
+                        point.y - radius,
+                        radius * 2,
+                        radius * 2
+                    )
+                )
+            )
+        }
+        return area
     }
 
     /**
@@ -109,7 +134,6 @@ object PaintGeometryEngine {
             }
             g.draw(path)
 
-            // Close tiny endpoint gaps for fill detection
             if (shifted.first().distance(shifted.last()) <= max(6.0, stroke.width * 1.8)) {
                 g.drawLine(
                     shifted.last().x,
@@ -158,15 +182,6 @@ object PaintGeometryEngine {
         return buildDenseFillStrokes(visited, fillColor, offsetX, offsetY)
     }
 
-    /**
-     * Converts filled pixels into many short normal strokes.
-     * This avoids a special fill object and keeps everything in the same drawing model.
-     *
-     * For these temporary view-space strokes:
-     * - dx stores view-space x
-     * - dy stores view-space y
-     * - line/column are unused placeholders until DrawingCanvasPanel converts them
-     */
     private fun buildDenseFillStrokes(
         visited: Array<BooleanArray>,
         fillColor: Color,
@@ -184,8 +199,6 @@ object PaintGeometryEngine {
                 val end = x - 1
 
                 if (start <= end) {
-                    // Split long horizontal runs into short ordinary segments
-                    // so erase behaves more like draw-tool content and less like scanlines.
                     var segStart = start
                     while (segStart <= end) {
                         val segEnd = minOf(segStart + 6, end)
@@ -208,10 +221,9 @@ object PaintGeometryEngine {
         return result
     }
 
-    private fun cutStrokeByEraser(
+    private fun cutStrokeByEraserArea(
         stroke: StrokePath,
-        localPoint: Point,
-        radius: Double,
+        eraserArea: Area,
         toViewPoint: (AnchorPoint) -> Point?
     ): MutableList<StrokePath> {
         val viewPoints = stroke.points.mapNotNull { anchor ->
@@ -234,7 +246,7 @@ object PaintGeometryEngine {
         for (i in 0 until viewPoints.lastIndex) {
             val (aAnchor, aPoint) = viewPoints[i]
             val (bAnchor, bPoint) = viewPoints[i + 1]
-            val hits = distancePointToSegment(localPoint, aPoint, bPoint) <= radius
+            val hits = segmentIntersectsArea(eraserArea, aPoint, bPoint)
 
             if (!hits) {
                 if (current.isEmpty()) current += aAnchor.copy()
@@ -257,6 +269,33 @@ object PaintGeometryEngine {
                 kind = stroke.kind
             )
         }
+    }
+
+    private fun segmentIntersectsArea(area: Area, a: Point, b: Point): Boolean {
+        val minX = minOf(a.x, b.x)
+        val minY = minOf(a.y, b.y)
+        val maxX = maxOf(a.x, b.x)
+        val maxY = maxOf(a.y, b.y)
+
+        if (!area.intersects(
+                minX.toDouble() - 2.0,
+                minY.toDouble() - 2.0,
+                (maxX - minX).toDouble() + 4.0,
+                (maxY - minY).toDouble() + 4.0
+            )
+        ) {
+            return false
+        }
+
+        val steps = maxOf(1, kotlin.math.ceil(a.distance(b) / 6.0).toInt())
+        for (i in 0..steps) {
+            val t = i.toDouble() / steps
+            val x = a.x + (b.x - a.x) * t
+            val y = a.y + (b.y - a.y) * t
+            if (area.contains(x, y)) return true
+        }
+
+        return false
     }
 
     fun areaToFilledStrokes(area: Area, color: Color, width: Float): MutableList<StrokePath> {
