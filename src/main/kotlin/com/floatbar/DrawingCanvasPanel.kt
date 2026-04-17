@@ -56,6 +56,7 @@ class DrawingCanvasPanel(
     private var shapeStartPoint: Point? = null
     private var shapePreview: StrokePath? = null
     private var lastDragPoint: Point? = null
+    private var lastDragLine: Int? = null
 
     private var drawColor = Color(255, 0, 0, 210)
     private var gridEnabled = true
@@ -64,6 +65,11 @@ class DrawingCanvasPanel(
     private val canvasPadding = 10
     private val gridExtendLeftPx = 8
     private val minCodeClearancePx = 8
+
+    // Tuned for smoother drawing without ugly long jumps.
+    private val hardBreakLineJump = 4
+    private val freehandSpacingPx = 4.0
+    private val eraserSpacingPx = 14.0
 
     init {
         isOpaque = false
@@ -99,6 +105,7 @@ class DrawingCanvasPanel(
                         }
 
                         lastDragPoint = null
+                        lastDragLine = null
                     }
 
                     FloatBarToolMode.ERASE -> {
@@ -106,6 +113,7 @@ class DrawingCanvasPanel(
                         saveStateForUndo()
                         applyEraseAt(safePoint)
                         lastDragPoint = safePoint
+                        lastDragLine = resolvePanelLine(safePoint)
                     }
 
                     FloatBarToolMode.SHAPES -> {
@@ -114,6 +122,7 @@ class DrawingCanvasPanel(
                         shapeStartPoint = safePoint
                         shapePreview = null
                         lastDragPoint = safePoint
+                        lastDragLine = resolvePanelLine(safePoint)
                     }
 
                     else -> {
@@ -129,6 +138,7 @@ class DrawingCanvasPanel(
                         currentStrokes().add(stroke)
                         addAnchorPoint(stroke, safePoint)
                         lastDragPoint = safePoint
+                        lastDragLine = resolvePanelLine(safePoint)
                         repaint()
                     }
                 }
@@ -141,12 +151,17 @@ class DrawingCanvasPanel(
                     FloatBarToolMode.ERASE -> {
                         val safePoint = clampPointToDrawableArea(e.point) ?: return
                         val previous = lastDragPoint
+                        val previousLine = lastDragLine
+                        val currentLine = resolvePanelLine(safePoint)
+
                         if (previous == null) {
                             applyEraseAt(safePoint)
                         } else {
-                            eraseInterpolated(previous, safePoint)
+                            eraseInterpolated(previous, safePoint, previousLine, currentLine)
                         }
+
                         lastDragPoint = safePoint
+                        lastDragLine = currentLine
                         repaint()
                     }
 
@@ -155,19 +170,34 @@ class DrawingCanvasPanel(
                         val safePoint = clampPointToDrawableArea(e.point) ?: return
                         shapePreview = buildShapeStroke(start, safePoint, selectedShapeKind, e.isShiftDown)
                         lastDragPoint = safePoint
+                        lastDragLine = resolvePanelLine(safePoint)
                         repaint()
                     }
 
                     else -> {
-                        val stroke = currentStroke ?: return
                         val safePoint = clampPointToDrawableArea(e.point) ?: return
+                        val safeLine = resolvePanelLine(safePoint)
                         val previous = lastDragPoint
+                        val previousLine = lastDragLine
+
                         if (previous == null) {
-                            addAnchorPoint(stroke, safePoint)
+                            ensureActiveStroke()
+                            currentStroke?.let { addAnchorPoint(it, safePoint) }
+                        } else if (previousLine != null && safeLine != null && abs(safeLine - previousLine) >= hardBreakLineJump) {
+                            // Only break on very large jumps.
+                            currentStroke = StrokePath(
+                                color = drawColor,
+                                width = 3.5f
+                            )
+                            currentStrokes().add(currentStroke!!)
+                            addAnchorPoint(currentStroke!!, safePoint)
                         } else {
-                            addInterpolatedPoints(stroke, previous, safePoint)
+                            ensureActiveStroke()
+                            currentStroke?.let { addInterpolatedPointsSmart(it, previous, safePoint) }
                         }
+
                         lastDragPoint = safePoint
+                        lastDragLine = safeLine
                         repaint()
                     }
                 }
@@ -177,6 +207,7 @@ class DrawingCanvasPanel(
                 when (currentTool) {
                     FloatBarToolMode.ERASE -> {
                         lastDragPoint = null
+                        lastDragLine = null
                         persistCurrentStrokes()
                         refreshHistoryState()
                         repaint()
@@ -192,16 +223,19 @@ class DrawingCanvasPanel(
                         shapeStartPoint = null
                         shapePreview = null
                         lastDragPoint = null
+                        lastDragLine = null
                         repaint()
                     }
 
                     FloatBarToolMode.FILL -> {
                         lastDragPoint = null
+                        lastDragLine = null
                     }
 
                     else -> {
                         currentStroke = null
                         lastDragPoint = null
+                        lastDragLine = null
                         persistCurrentStrokes()
                         refreshHistoryState()
                     }
@@ -220,6 +254,7 @@ class DrawingCanvasPanel(
         currentStroke = null
         shapePreview = null
         lastDragPoint = null
+        lastDragLine = null
         loadPersistedStrokes()
         bindDocumentListener(editor.document)
         refreshHistoryState()
@@ -233,6 +268,7 @@ class DrawingCanvasPanel(
         currentStroke = null
         shapePreview = null
         lastDragPoint = null
+        lastDragLine = null
         repaint()
     }
 
@@ -432,6 +468,16 @@ class DrawingCanvasPanel(
         stateService.setStrokes(filePath, saved)
     }
 
+    private fun ensureActiveStroke() {
+        if (currentStroke == null) {
+            currentStroke = StrokePath(
+                color = drawColor,
+                width = 3.5f
+            )
+            currentStrokes().add(currentStroke!!)
+        }
+    }
+
     private fun applyEraseAt(point: Point) {
         val document = editor?.document ?: return
         val erased = PaintGeometryEngine.eraseAt(
@@ -443,30 +489,50 @@ class DrawingCanvasPanel(
         strokesByDocument[document] = erased.toMutableList()
     }
 
-    private fun eraseInterpolated(from: Point, to: Point) {
+    private fun eraseInterpolated(from: Point, to: Point, fromLine: Int?, toLine: Int?) {
         val distance = from.distance(to)
-        val steps = max(1, ceil(distance / 6.0).toInt())
+
+        // Large row jump: sparse erase only at endpoints and a midpoint.
+        if (fromLine != null && toLine != null && abs(toLine - fromLine) >= hardBreakLineJump) {
+            applyEraseAt(from)
+            applyEraseAt(midPoint(from, to))
+            applyEraseAt(to)
+            return
+        }
+
+        val steps = max(1, ceil(distance / eraserSpacingPx).toInt())
         for (i in 1..steps) {
             val t = i.toDouble() / steps
-            val p = Point(
+            val raw = Point(
                 (from.x + (to.x - from.x) * t).toInt(),
                 (from.y + (to.y - from.y) * t).toInt()
             )
-            applyEraseAt(p)
+            val safe = clampPointToDrawableArea(raw) ?: continue
+            applyEraseAt(safe)
         }
     }
 
-    private fun addInterpolatedPoints(stroke: StrokePath, from: Point, to: Point) {
+    private fun addInterpolatedPointsSmart(stroke: StrokePath, from: Point, to: Point) {
+        val editor = editor ?: return
         val distance = from.distance(to)
-        val steps = max(1, ceil(distance / 2.0).toInt())
+        val lineHeight = editor.lineHeight.coerceAtLeast(1)
+        val yDrivenSteps = ceil(abs(to.y - from.y).toDouble() / (lineHeight * 0.35)).toInt()
+        val distanceDrivenSteps = ceil(distance / freehandSpacingPx).toInt()
+        val steps = max(1, max(yDrivenSteps, distanceDrivenSteps))
+
         for (i in 1..steps) {
             val t = i.toDouble() / steps
-            val p = Point(
-                (from.x + (to.x - from.x) * t).toInt(),
-                (from.y + (to.y - from.y) * t).toInt()
+            val raw = Point(
+                (from.x + (to.x - from.x) * t).roundToInt(),
+                (from.y + (to.y - from.y) * t).roundToInt()
             )
-            addAnchorPoint(stroke, p)
+            val safe = clampPointToDrawableArea(raw) ?: continue
+            addAnchorPoint(stroke, safe)
         }
+    }
+
+    private fun midPoint(a: Point, b: Point): Point {
+        return Point((a.x + b.x) / 2, (a.y + b.y) / 2)
     }
 
     private fun addAnchorPoint(stroke: StrokePath, point: Point) {
@@ -508,6 +574,15 @@ class DrawingCanvasPanel(
         val clampedX = max(editorPoint.x, lineInfo.codeRightX + minCodeClearancePx)
         val clampedEditorPoint = Point(clampedX, editorPoint.y)
         return SwingUtilities.convertPoint(editor.contentComponent, clampedEditorPoint, this)
+    }
+
+    private fun resolvePanelLine(point: Point): Int? {
+        val editor = editor ?: return null
+        val editorPoint = SwingUtilities.convertPoint(this, point, editor.contentComponent)
+        val logical = editor.xyToLogicalPosition(editorPoint)
+        val document = editor.document
+        if (document.lineCount <= 0) return null
+        return logical.line.coerceIn(0, document.lineCount - 1)
     }
 
     private fun toViewPoint(anchor: AnchorPoint): Point? {
