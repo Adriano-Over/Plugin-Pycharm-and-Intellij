@@ -1,10 +1,7 @@
 package com.floatbar
 
 import com.intellij.openapi.components.service
-import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.editor.event.DocumentEvent
-import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -18,10 +15,7 @@ import java.awt.RenderingHints
 import javax.swing.JDialog
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
-import javax.swing.Timer
 import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 class DrawingCanvasPanel(
@@ -38,9 +32,6 @@ class DrawingCanvasPanel(
         stateService = project.service<FloatBarDrawingStateService>()
     )
     private val historyStore = DrawingHistoryStore(maxUndoDepth = 50)
-
-    private var documentListener: DocumentListener? = null
-    private var persistenceTimer: Timer? = null
 
     private val persistenceDebounceMs = 200
 
@@ -76,11 +67,32 @@ class DrawingCanvasPanel(
         gridExtendLeftPx = gridExtendLeftPx
     )
 
+    private val strokeWorkspace = DrawingStrokeWorkspace(
+        currentDocument = { editor?.document },
+        strokeStore = strokeStore,
+        coordinateMapper = coordinateMapper,
+        strokeRenderer = strokeRenderer
+    )
+
     private val strokePathTools = DrawingStrokePathTools(
         eraseRadius = eraseRadius,
         freehandSimplifyTolerancePx = freehandSimplifyTolerancePx,
         freehandSimplifyMinPoints = freehandSimplifyMinPoints,
         toViewPoint = coordinateMapper::toViewPoint
+    )
+
+    private val documentSync = DrawingDocumentSync(
+        coordinateMapper = coordinateMapper,
+        strokeStore = strokeStore,
+        persistenceDebounceMs = persistenceDebounceMs,
+        currentEditor = { editor },
+        currentFilePath = { currentFile?.path },
+        currentStrokes = ::currentStrokes,
+        onDocumentStrokesRemapped = { document ->
+            strokeWorkspace.rebuildStrokeBounds(document)
+            strokeWorkspace.resetStrokeGeometryCache(document)
+        },
+        repaintCanvas = ::repaint
     )
 
     init {
@@ -107,21 +119,21 @@ class DrawingCanvasPanel(
     }
 
     fun bindEditor(editor: Editor) {
-        persistCurrentStrokes()
-        unbindDocumentListener()
+        documentSync.persistCurrentStrokes()
+        documentSync.unbindDocumentListener()
         this.editor = editor
         this.currentFile = FileDocumentManager.getInstance().getFile(editor.document)
         currentStroke = null
         shapePreview = null
-        loadPersistedStrokes()
-        bindDocumentListener(editor.document)
+        documentSync.loadPersistedStrokes()
+        documentSync.bindDocumentListener(editor.document)
         refreshHistoryState()
         repaint()
     }
 
     fun unbindEditor() {
-        persistCurrentStrokes()
-        unbindDocumentListener()
+        documentSync.persistCurrentStrokes()
+        documentSync.unbindDocumentListener()
         editor = null
         currentFile = null
         currentStroke = null
@@ -175,10 +187,10 @@ class DrawingCanvasPanel(
     fun clearCanvas() {
         val document = editor?.document ?: return
         saveStateForUndo()
-        strokeStore.clearDocument(document)
+        strokeWorkspace.clearDocument(document)
         currentStroke = null
         shapePreview = null
-        persistCurrentStrokes()
+        documentSync.persistCurrentStrokes()
         refreshHistoryState()
         repaint()
     }
@@ -186,10 +198,10 @@ class DrawingCanvasPanel(
     fun undo() {
         val document = editor?.document ?: return
         val restored = historyStore.restoreUndo(document, currentStrokes()) ?: return
-        strokeStore.setStrokes(document, restored.toMutableList())
-        rebuildStrokeBounds(document)
-        resetStrokeGeometryCache(document)
-        persistCurrentStrokes()
+        strokeWorkspace.setStrokes(document, restored.toMutableList())
+        strokeWorkspace.rebuildStrokeBounds(document)
+        strokeWorkspace.resetStrokeGeometryCache(document)
+        documentSync.persistCurrentStrokes()
         refreshHistoryState()
         repaint()
     }
@@ -197,10 +209,10 @@ class DrawingCanvasPanel(
     fun redo() {
         val document = editor?.document ?: return
         val restored = historyStore.restoreRedo(document, currentStrokes()) ?: return
-        strokeStore.setStrokes(document, restored.toMutableList())
-        rebuildStrokeBounds(document)
-        resetStrokeGeometryCache(document)
-        persistCurrentStrokes()
+        strokeWorkspace.setStrokes(document, restored.toMutableList())
+        strokeWorkspace.rebuildStrokeBounds(document)
+        strokeWorkspace.resetStrokeGeometryCache(document)
+        documentSync.persistCurrentStrokes()
         refreshHistoryState()
         repaint()
     }
@@ -220,43 +232,7 @@ class DrawingCanvasPanel(
         repaint()
     }
 
-    private fun bindDocumentListener(document: Document) {
-        val listener = object : DocumentListener {
-            override fun documentChanged(event: DocumentEvent) {
-                coordinateMapper.remapAnchorsForDocumentChange(document, event, strokeStore.currentStrokes(document))
-                rebuildStrokeBounds(document)
-                resetStrokeGeometryCache(document)
-                schedulePersistCurrentStrokes()
-                repaint()
-            }
-        }
-        document.addDocumentListener(listener)
-        documentListener = listener
-    }
-
-    private fun unbindDocumentListener() {
-        val doc = editor?.document
-        val listener = documentListener
-        if (doc != null && listener != null) {
-            doc.removeDocumentListener(listener)
-        }
-        documentListener = null
-    }
-
-    private fun currentStrokes(): MutableList<StrokePath> {
-        val document = editor?.document ?: return mutableListOf()
-        return strokeStore.currentStrokes(document)
-    }
-
-    private fun currentStrokeBounds(): MutableMap<Long, StrokeLineBounds> {
-        val document = editor?.document ?: return mutableMapOf()
-        return strokeStore.currentStrokeBounds(document)
-    }
-
-    private fun currentStrokeGeometries(): MutableMap<Long, StrokeGeometryContent> {
-        val document = editor?.document ?: return mutableMapOf()
-        return strokeStore.currentStrokeGeometries(document)
-    }
+    private fun currentStrokes(): MutableList<StrokePath> = strokeWorkspace.currentStrokes()
 
     private fun saveStateForUndo() {
         val document = editor?.document ?: return
@@ -266,93 +242,6 @@ class DrawingCanvasPanel(
 
     private fun refreshHistoryState() {
         onHistoryChanged(canUndo(), canRedo())
-    }
-
-    private fun addStrokeToCurrentDocument(stroke: StrokePath) {
-        currentStrokes().add(stroke)
-        updateStrokeBounds(stroke)
-        invalidateStrokeGeometry(stroke)
-    }
-
-    private fun rebuildStrokeBounds(document: Document) {
-        val strokes = strokeStore.currentStrokes(document)
-        val rebuilt = mutableMapOf<Long, StrokeLineBounds>()
-        for (stroke in strokes) {
-            computeStrokeLineBounds(stroke)?.let { rebuilt[stroke.id] = it }
-        }
-        strokeStore.currentStrokeBounds(document).apply {
-            clear()
-            putAll(rebuilt)
-        }
-    }
-
-    private fun computeStrokeLineBounds(stroke: StrokePath): StrokeLineBounds? {
-        if (stroke.points.isEmpty()) return null
-
-        var minLine = Int.MAX_VALUE
-        var maxLine = Int.MIN_VALUE
-
-        for (point in stroke.points) {
-            minLine = min(minLine, point.line)
-            maxLine = max(maxLine, point.line)
-        }
-
-        return if (minLine == Int.MAX_VALUE) null else StrokeLineBounds(minLine, maxLine)
-    }
-
-    private fun updateStrokeBounds(stroke: StrokePath) {
-        val bounds = computeStrokeLineBounds(stroke) ?: return
-        currentStrokeBounds()[stroke.id] = bounds
-    }
-
-    private fun expandStrokeBoundsWithAnchor(stroke: StrokePath, anchor: AnchorPoint) {
-        val boundsMap = currentStrokeBounds()
-        val existing = boundsMap[stroke.id]
-        boundsMap[stroke.id] = if (existing == null) {
-            StrokeLineBounds(anchor.line, anchor.line)
-        } else {
-            StrokeLineBounds(
-                min(existing.minLine, anchor.line),
-                max(existing.maxLine, anchor.line)
-            )
-        }
-    }
-
-    private fun invalidateStrokeGeometry(stroke: StrokePath) {
-        currentStrokeGeometries().remove(stroke.id)
-    }
-
-    private fun resetStrokeGeometryCache(document: Document) {
-        strokeStore.currentStrokeGeometries(document).clear()
-    }
-
-    private fun schedulePersistCurrentStrokes() {
-        val filePath = currentFile?.path ?: return
-        val timer = persistenceTimer ?: Timer(persistenceDebounceMs) {
-            persistCurrentStrokes()
-        }.also {
-            it.isRepeats = false
-            persistenceTimer = it
-        }
-
-        if (filePath.isEmpty()) return
-        timer.restart()
-    }
-
-    private fun loadPersistedStrokes() {
-        val editor = editor ?: return
-        val document = editor.document
-        val filePath = currentFile?.path ?: return
-        strokeStore.loadPersistedStrokes(filePath, document) { doc, anchor ->
-            coordinateMapper.normalizeAnchor(doc, anchor)
-        }
-        rebuildStrokeBounds(document)
-        resetStrokeGeometryCache(document)
-    }
-
-    private fun persistCurrentStrokes() {
-        persistenceTimer?.stop()
-        strokeStore.persistStrokes(currentFile?.path, currentStrokes())
     }
 
     internal fun handleFillPressed(safePoint: Point) {
@@ -371,9 +260,9 @@ class DrawingCanvasPanel(
         )
         if (filledStrokes.isNotEmpty()) {
             for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
-                addStrokeToCurrentDocument(stroke)
+                strokeWorkspace.addStroke(stroke)
             }
-            schedulePersistCurrentStrokes()
+            documentSync.schedulePersistCurrentStrokes()
             refreshHistoryState()
             repaint()
         }
@@ -382,13 +271,13 @@ class DrawingCanvasPanel(
     internal fun handleErasePressed(safePoint: Point) {
         saveStateForUndo()
         applyErasePath(listOf(safePoint))
-        repaintAround(listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
+        DrawingViewportTools.repaintAround(this, listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
     }
 
     internal fun handleEraseDragged(previous: Point?, safePoint: Point) {
         if (previous == null) {
             applyErasePath(listOf(safePoint))
-            repaintAround(listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
+            DrawingViewportTools.repaintAround(this, listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
             return
         }
 
@@ -398,11 +287,11 @@ class DrawingCanvasPanel(
 
         val samples = strokePathTools.buildEraseSamples(previous, safePoint)
         applyErasePath(samples)
-        repaintAround(samples, dirtyPaddingPx + eraseRadius.roundToInt())
+        DrawingViewportTools.repaintAround(this, samples, dirtyPaddingPx + eraseRadius.roundToInt())
     }
 
     internal fun handleEraseReleased() {
-        schedulePersistCurrentStrokes()
+        documentSync.schedulePersistCurrentStrokes()
         refreshHistoryState()
         repaint()
     }
@@ -416,15 +305,15 @@ class DrawingCanvasPanel(
         val oldPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
         shapePreview = buildShapeStroke(start, safePoint, selectedShapeKind, isShiftDown)
         val newPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
-        repaintAround(oldPreviewPoints + newPreviewPoints + listOf(start, safePoint))
+        DrawingViewportTools.repaintAround(this, oldPreviewPoints + newPreviewPoints + listOf(start, safePoint), dirtyPaddingPx)
     }
 
     internal fun handleShapeReleased() {
         val preview = shapePreview
         if (preview != null && preview.points.size >= 2) {
             val committed = preview.deepCopy()
-            addStrokeToCurrentDocument(committed)
-            schedulePersistCurrentStrokes()
+            strokeWorkspace.addStroke(committed)
+            documentSync.schedulePersistCurrentStrokes()
             refreshHistoryState()
         }
         shapePreview = null
@@ -435,34 +324,34 @@ class DrawingCanvasPanel(
         saveStateForUndo()
         val stroke = StrokePath(color = drawColor, width = 3.5f)
         currentStroke = stroke
-        addStrokeToCurrentDocument(stroke)
+        strokeWorkspace.addStroke(stroke)
         addAnchorPoint(stroke, safePoint)
-        repaintAround(listOf(safePoint))
+        DrawingViewportTools.repaintAround(this, listOf(safePoint), dirtyPaddingPx)
     }
 
     internal fun handleDrawDragged(previous: Point?, safePoint: Point) {
         val stroke = currentStroke ?: return
         if (previous == null) {
             addAnchorPoint(stroke, safePoint)
-            repaintAround(listOf(safePoint))
+            DrawingViewportTools.repaintAround(this, listOf(safePoint), dirtyPaddingPx)
         } else {
             val samples = strokePathTools.buildDrawSamples(previous, safePoint)
             for (p in samples) {
                 addAnchorPoint(stroke, p)
             }
-            repaintAround(samples + listOf(previous, safePoint))
+            DrawingViewportTools.repaintAround(this, samples + listOf(previous, safePoint), dirtyPaddingPx)
         }
     }
 
     internal fun handleDrawReleased() {
         currentStroke?.let { stroke ->
             if (strokePathTools.simplifyFreehandStrokeInPlace(stroke)) {
-                updateStrokeBounds(stroke)
-                invalidateStrokeGeometry(stroke)
+                strokeWorkspace.updateStrokeBounds(stroke)
+                strokeWorkspace.invalidateStrokeGeometry(stroke)
             }
         }
         currentStroke = null
-        schedulePersistCurrentStrokes()
+        documentSync.schedulePersistCurrentStrokes()
         refreshHistoryState()
     }
 
@@ -473,14 +362,16 @@ class DrawingCanvasPanel(
         val allStrokes = currentStrokes()
         if (allStrokes.isEmpty()) return
 
-        val candidateRange = computeEraseCandidateLineRange(points)
-        val boundsMap = currentStrokeBounds()
-        val geometryMap = currentStrokeGeometries()
+        val currentEditor = editor ?: return
+        val candidateRange = DrawingViewportTools.computeEraseCandidateLineRange(this, currentEditor, coordinateMapper, points)
+        val boundsMap = strokeWorkspace.currentStrokeBounds()
+        val geometryMap = strokeWorkspace.currentStrokeGeometries()
 
         val candidates = mutableListOf<StrokePath>()
 
         for (stroke in allStrokes) {
-            val bounds = boundsMap[stroke.id] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
+            val bounds = boundsMap[stroke.id]
+                ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
             if (bounds == null) {
                 continue
             }
@@ -524,38 +415,13 @@ class DrawingCanvasPanel(
 
             for (replacement in replacements) {
                 merged += replacement
-                computeStrokeLineBounds(replacement)?.let { boundsMap[replacement.id] = it }
+                DrawingViewportTools.computeStrokeLineBounds(replacement)?.let { boundsMap[replacement.id] = it }
                 geometryMap.remove(replacement.id)
             }
         }
 
-        strokeStore.setStrokes(document, merged)
+        strokeWorkspace.setStrokes(document, merged)
     }
-
-    private fun computeEraseCandidateLineRange(points: List<Point>): Pair<Int, Int> {
-        val editor = editor ?: return 0 to Int.MAX_VALUE
-        val document = editor.document
-        if (document.lineCount <= 0 || points.isEmpty()) return 0 to 0
-
-        var minLine = Int.MAX_VALUE
-        var maxLine = Int.MIN_VALUE
-
-        for (point in points) {
-            val clamped = coordinateMapper.clampPointToDrawableArea(point) ?: continue
-            val editorPoint = SwingUtilities.convertPoint(this, clamped, editor.contentComponent)
-            val lineInfo = coordinateMapper.resolveLineInfo(editorPoint) ?: continue
-            minLine = min(minLine, lineInfo.line)
-            maxLine = max(maxLine, lineInfo.line)
-        }
-
-        if (minLine == Int.MAX_VALUE) return 0 to (document.lineCount - 1)
-
-        val linePadding = 2
-        return (minLine - linePadding).coerceAtLeast(0) to
-            (maxLine + linePadding).coerceAtMost(document.lineCount - 1)
-    }
-
-
 
     private fun addAnchorPoint(stroke: StrokePath, point: Point) {
         val anchor = coordinateMapper.viewPointToAnchor(point) ?: return
@@ -569,10 +435,9 @@ class DrawingCanvasPanel(
             return
         }
         stroke.points += anchor
-        expandStrokeBoundsWithAnchor(stroke, anchor)
-        invalidateStrokeGeometry(stroke)
+        strokeWorkspace.expandStrokeBoundsWithAnchor(stroke, anchor)
+        strokeWorkspace.invalidateStrokeGeometry(stroke)
     }
-
 
     private fun convertViewStrokeToAnchors(stroke: StrokePath): StrokePath {
         val converted = stroke.points.mapNotNull { source ->
@@ -589,23 +454,6 @@ class DrawingCanvasPanel(
         )
     }
 
-    private fun buildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
-        return strokeRenderer.buildStrokeGeometryContent(
-            stroke = stroke,
-            toContentPoint = coordinateMapper::toContentPoint
-        )
-    }
-
-    private fun getOrBuildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
-        val cache = currentStrokeGeometries()
-        val cached = cache[stroke.id]
-        if (cached != null) return cached
-
-        val built = buildStrokeGeometryContent(stroke) ?: return null
-        cache[stroke.id] = built
-        return built
-    }
-
     private fun buildShapeStroke(start: Point, end: Point, kind: ShapeKind, constrain: Boolean): StrokePath {
         return ShapeStrokeFactory.buildShapeStroke(
             start = start,
@@ -620,54 +468,29 @@ class DrawingCanvasPanel(
         )
     }
 
-    private fun repaintAround(points: List<Point>, padding: Int = dirtyPaddingPx) {
-        if (points.isEmpty()) {
-            repaint()
-            return
-        }
-
-        var minX = Int.MAX_VALUE
-        var minY = Int.MAX_VALUE
-        var maxX = Int.MIN_VALUE
-        var maxY = Int.MIN_VALUE
-
-        for (p in points) {
-            minX = min(minX, p.x)
-            minY = min(minY, p.y)
-            maxX = max(maxX, p.x)
-            maxY = max(maxY, p.y)
-        }
-
-        if (minX == Int.MAX_VALUE) {
-            repaint()
-            return
-        }
-
-        val x = (minX - padding).coerceAtLeast(0)
-        val y = (minY - padding).coerceAtLeast(0)
-        val w = (maxX - minX + padding * 2).coerceAtLeast(1)
-        val h = (maxY - minY + padding * 2).coerceAtLeast(1)
-
-        repaint(x, y, w, h)
-    }
-
     override fun paintComponent(graphics: Graphics) {
         super.paintComponent(graphics)
-        val editor = editor ?: return
+        val currentEditor = editor ?: return
         val g = graphics as Graphics2D
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
         val clip = g.clipBounds ?: Rectangle(0, 0, width, height)
-        val lineHeight = editor.lineHeight.takeIf { it > 0 } ?: 16
+        val lineHeight = currentEditor.lineHeight.takeIf { it > 0 } ?: 16
 
         if (gridEnabled) {
-            paintGridWithEdge(g, lineHeight, clip)
+            strokeRenderer.paintGridWithEdge(
+                g = g,
+                cellSize = lineHeight,
+                clip = clip,
+                width = width,
+                height = height
+            )
         }
 
-        val visibleLineRange = resolveVisibleLineRange(clip)
-        val boundsMap = currentStrokeBounds()
+        val visibleLineRange = DrawingViewportTools.resolveVisibleLineRange(this, currentEditor, clip)
+        val boundsMap = strokeWorkspace.currentStrokeBounds()
 
-        val contentOrigin = SwingUtilities.convertPoint(editor.contentComponent, Point(0, 0), this)
+        val contentOrigin = SwingUtilities.convertPoint(currentEditor.contentComponent, Point(0, 0), this)
         val contentClip = Rectangle(
             clip.x - contentOrigin.x,
             clip.y - contentOrigin.y,
@@ -678,14 +501,15 @@ class DrawingCanvasPanel(
         gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
 
         for (stroke in currentStrokes()) {
-            val bounds = boundsMap[stroke.id] ?: computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
+            val bounds = boundsMap[stroke.id]
+                ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
             if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
                 paintStroke(gContent, stroke, visibleContentClip = contentClip)
             }
         }
 
         shapePreview?.let {
-            val previewBounds = computeStrokeLineBounds(it)
+            val previewBounds = DrawingViewportTools.computeStrokeLineBounds(it)
             if (previewBounds != null &&
                 previewBounds.maxLine >= visibleLineRange.first &&
                 previewBounds.minLine <= visibleLineRange.second
@@ -697,34 +521,6 @@ class DrawingCanvasPanel(
         gContent.dispose()
     }
 
-    private fun resolveVisibleLineRange(clip: Rectangle): Pair<Int, Int> {
-        val editor = editor ?: return 0 to Int.MAX_VALUE
-        val document = editor.document
-        if (document.lineCount <= 0) return 0 to 0
-
-        val topEditorPoint = SwingUtilities.convertPoint(this, Point(clip.x, clip.y), editor.contentComponent)
-        val bottomEditorPoint = SwingUtilities.convertPoint(
-            this,
-            Point(clip.x + clip.width, clip.y + clip.height),
-            editor.contentComponent
-        )
-
-        val topLine = editor.xyToLogicalPosition(topEditorPoint).line.coerceIn(0, document.lineCount - 1)
-        val bottomLine = editor.xyToLogicalPosition(bottomEditorPoint).line.coerceIn(0, document.lineCount - 1)
-
-        return (topLine - 2).coerceAtLeast(0) to (bottomLine + 2).coerceAtMost(document.lineCount - 1)
-    }
-
-    private fun paintGridWithEdge(g: Graphics2D, cellSize: Int, clip: Rectangle) {
-        strokeRenderer.paintGridWithEdge(
-            g = g,
-            cellSize = cellSize,
-            clip = clip,
-            width = width,
-            height = height
-        )
-    }
-
     private fun paintStroke(
         g: Graphics2D,
         stroke: StrokePath,
@@ -732,9 +528,9 @@ class DrawingCanvasPanel(
         visibleContentClip: Rectangle? = null
     ) {
         val geometry = if (preview) {
-            buildStrokeGeometryContent(stroke)
+            strokeWorkspace.buildStrokeGeometryContent(stroke)
         } else {
-            getOrBuildStrokeGeometryContent(stroke)
+            strokeWorkspace.getOrBuildStrokeGeometryContent(stroke)
         } ?: return
 
         strokeRenderer.paintStroke(
