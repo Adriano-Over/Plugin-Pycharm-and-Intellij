@@ -1,0 +1,294 @@
+package com.floatbar
+
+import com.intellij.openapi.editor.Editor
+import java.awt.Color
+import java.awt.Point
+import java.awt.Rectangle
+import javax.swing.JPanel
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+class DrawingCanvasController(
+    private val canvas: JPanel,
+    private val editorProvider: () -> Editor?,
+    private val currentStrokesProvider: () -> MutableList<StrokePath>,
+    private val historyStore: DrawingHistoryStore,
+    private val strokeWorkspace: DrawingStrokeWorkspace,
+    private val documentSync: DrawingDocumentSync,
+    private val coordinateMapper: DrawingCoordinateMapper,
+    private val strokePathTools: DrawingStrokePathTools,
+    private val drawColorProvider: () -> Color,
+    private val selectedShapeKindProvider: () -> ShapeKind,
+    private val currentStrokeGetter: () -> StrokePath?,
+    private val currentStrokeSetter: (StrokePath?) -> Unit,
+    private val shapePreviewGetter: () -> StrokePath?,
+    private val shapePreviewSetter: (StrokePath?) -> Unit,
+    private val refreshHistoryState: () -> Unit,
+    private val canvasPadding: Int,
+    private val dirtyPaddingPx: Int,
+    private val eraseRadius: Double,
+    private val eraseMinMovePx: Double,
+    private val shapeEdgeSpacing: Double,
+    private val ellipseSegments: Int
+) {
+    private val drawStrokeWidth = 3.5f
+
+    fun clearCanvas() {
+        val document = editorProvider()?.document ?: return
+        saveStateForUndo()
+        strokeWorkspace.clearDocument(document)
+        currentStrokeSetter(null)
+        shapePreviewSetter(null)
+        documentSync.persistCurrentStrokes()
+        refreshHistoryState()
+        canvas.repaint()
+    }
+
+    fun undo() {
+        val document = editorProvider()?.document ?: return
+        val restored = historyStore.restoreUndo(document, currentStrokesProvider()) ?: return
+        strokeWorkspace.setStrokes(document, restored.toMutableList())
+        strokeWorkspace.rebuildStrokeBounds(document)
+        strokeWorkspace.resetStrokeGeometryCache(document)
+        documentSync.persistCurrentStrokes()
+        refreshHistoryState()
+        canvas.repaint()
+    }
+
+    fun redo() {
+        val document = editorProvider()?.document ?: return
+        val restored = historyStore.restoreRedo(document, currentStrokesProvider()) ?: return
+        strokeWorkspace.setStrokes(document, restored.toMutableList())
+        strokeWorkspace.rebuildStrokeBounds(document)
+        strokeWorkspace.resetStrokeGeometryCache(document)
+        documentSync.persistCurrentStrokes()
+        refreshHistoryState()
+        canvas.repaint()
+    }
+
+    fun handleFillPressed(safePoint: Point) {
+        saveStateForUndo()
+        val filledStrokes = PaintGeometryEngine.fillAt(
+            strokes = currentStrokesProvider(),
+            seedPoint = safePoint,
+            fillColor = drawColorProvider(),
+            panelBounds = Rectangle(
+                -canvasPadding,
+                -canvasPadding,
+                canvas.width + canvasPadding * 2,
+                canvas.height + canvasPadding * 2
+            ),
+            toViewPoint = coordinateMapper::toViewPoint
+        )
+        if (filledStrokes.isNotEmpty()) {
+            for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
+                strokeWorkspace.addStroke(stroke)
+            }
+            documentSync.schedulePersistCurrentStrokes()
+            refreshHistoryState()
+            canvas.repaint()
+        }
+    }
+
+    fun handleErasePressed(safePoint: Point) {
+        saveStateForUndo()
+        applyErasePath(listOf(safePoint))
+        DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
+    }
+
+    fun handleEraseDragged(previous: Point?, safePoint: Point) {
+        if (previous == null) {
+            applyErasePath(listOf(safePoint))
+            DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
+            return
+        }
+
+        if (previous.distance(safePoint) < eraseMinMovePx) {
+            return
+        }
+
+        val samples = strokePathTools.buildEraseSamples(previous, safePoint)
+        applyErasePath(samples)
+        DrawingViewportTools.repaintAround(canvas, samples, dirtyPaddingPx + eraseRadius.roundToInt())
+    }
+
+    fun handleEraseReleased() {
+        documentSync.schedulePersistCurrentStrokes()
+        refreshHistoryState()
+        canvas.repaint()
+    }
+
+    fun handleShapePressed() {
+        saveStateForUndo()
+        shapePreviewSetter(null)
+    }
+
+    fun handleShapeDragged(start: Point, safePoint: Point, isShiftDown: Boolean) {
+        val oldPreviewPoints = shapePreviewGetter()?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
+        shapePreviewSetter(buildShapeStroke(start, safePoint, selectedShapeKindProvider(), isShiftDown))
+        val newPreviewPoints = shapePreviewGetter()?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
+        DrawingViewportTools.repaintAround(canvas, oldPreviewPoints + newPreviewPoints + listOf(start, safePoint), dirtyPaddingPx)
+    }
+
+    fun handleShapeReleased() {
+        val preview = shapePreviewGetter()
+        if (preview != null && preview.points.size >= 2) {
+            val committed = preview.deepCopy()
+            strokeWorkspace.addStroke(committed)
+            documentSync.schedulePersistCurrentStrokes()
+            refreshHistoryState()
+        }
+        shapePreviewSetter(null)
+        canvas.repaint()
+    }
+
+    fun handleDrawPressed(safePoint: Point) {
+        saveStateForUndo()
+        val stroke = StrokePath(color = drawColorProvider(), width = drawStrokeWidth)
+        currentStrokeSetter(stroke)
+        strokeWorkspace.addStroke(stroke)
+        addAnchorPoint(stroke, safePoint)
+        DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx)
+    }
+
+    fun handleDrawDragged(previous: Point?, safePoint: Point) {
+        val stroke = currentStrokeGetter() ?: return
+        if (previous == null) {
+            addAnchorPoint(stroke, safePoint)
+            DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx)
+        } else {
+            val samples = strokePathTools.buildDrawSamples(previous, safePoint)
+            for (p in samples) {
+                addAnchorPoint(stroke, p)
+            }
+            DrawingViewportTools.repaintAround(canvas, samples + listOf(previous, safePoint), dirtyPaddingPx)
+        }
+    }
+
+    fun handleDrawReleased() {
+        currentStrokeGetter()?.let { stroke ->
+            if (strokePathTools.simplifyFreehandStrokeInPlace(stroke)) {
+                strokeWorkspace.updateStrokeBounds(stroke)
+                strokeWorkspace.invalidateStrokeGeometry(stroke)
+            }
+        }
+        currentStrokeSetter(null)
+        documentSync.schedulePersistCurrentStrokes()
+        refreshHistoryState()
+    }
+
+    private fun saveStateForUndo() {
+        val document = editorProvider()?.document ?: return
+        historyStore.saveStateForUndo(document, currentStrokesProvider())
+        refreshHistoryState()
+    }
+
+    private fun applyErasePath(points: List<Point>) {
+        if (points.isEmpty()) return
+        val document = editorProvider()?.document ?: return
+        val currentEditor = editorProvider() ?: return
+
+        val allStrokes = currentStrokesProvider()
+        if (allStrokes.isEmpty()) return
+
+        val candidateRange = DrawingViewportTools.computeEraseCandidateLineRange(canvas, currentEditor, coordinateMapper, points)
+        val boundsMap = strokeWorkspace.currentStrokeBounds()
+        val geometryMap = strokeWorkspace.currentStrokeGeometries()
+
+        val candidates = mutableListOf<StrokePath>()
+        for (stroke in allStrokes) {
+            val bounds = boundsMap[stroke.id]
+                ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
+            if (bounds == null) continue
+
+            val intersectsLineRange =
+                bounds.maxLine >= candidateRange.first && bounds.minLine <= candidateRange.second
+            if (intersectsLineRange) {
+                candidates += stroke
+            }
+        }
+
+        if (candidates.isEmpty()) return
+
+        val rebuiltByStroke = PaintGeometryEngine.eraseAlongPathByStroke(
+            strokes = candidates,
+            localPoints = points,
+            radius = eraseRadius,
+            toViewPoint = coordinateMapper::toViewPoint
+        )
+
+        if (rebuiltByStroke.isEmpty()) return
+
+        var replacementCount = 0
+        for (replacements in rebuiltByStroke.values) {
+            replacementCount += replacements.size
+        }
+
+        for (stroke in candidates) {
+            boundsMap.remove(stroke.id)
+            geometryMap.remove(stroke.id)
+        }
+
+        val merged = ArrayList<StrokePath>(allStrokes.size - candidates.size + replacementCount)
+        for (stroke in allStrokes) {
+            val replacements = rebuiltByStroke[stroke.id]
+            if (replacements == null) {
+                merged += stroke
+                continue
+            }
+
+            for (replacement in replacements) {
+                merged += replacement
+                DrawingViewportTools.computeStrokeLineBounds(replacement)?.let { boundsMap[replacement.id] = it }
+                geometryMap.remove(replacement.id)
+            }
+        }
+
+        strokeWorkspace.setStrokes(document, merged)
+    }
+
+    private fun addAnchorPoint(stroke: StrokePath, point: Point) {
+        val anchor = coordinateMapper.viewPointToAnchor(point) ?: return
+        val last = stroke.points.lastOrNull()
+        if (last != null &&
+            last.line == anchor.line &&
+            last.column == anchor.column &&
+            abs(last.dx - anchor.dx) < 2 &&
+            abs(last.dy - anchor.dy) < 2
+        ) {
+            return
+        }
+        stroke.points += anchor
+        strokeWorkspace.expandStrokeBoundsWithAnchor(stroke, anchor)
+        strokeWorkspace.invalidateStrokeGeometry(stroke)
+    }
+
+    private fun convertViewStrokeToAnchors(stroke: StrokePath): StrokePath {
+        val converted = stroke.points.mapNotNull { source ->
+            val view = Point(source.dx, source.dy)
+            coordinateMapper.viewPointToAnchor(view)
+        }.toMutableList()
+
+        return StrokePath(
+            color = stroke.color,
+            width = stroke.width,
+            points = converted,
+            filled = stroke.filled,
+            kind = stroke.kind
+        )
+    }
+
+    private fun buildShapeStroke(start: Point, end: Point, kind: ShapeKind, constrain: Boolean): StrokePath {
+        return ShapeStrokeFactory.buildShapeStroke(
+            start = start,
+            end = end,
+            kind = kind,
+            constrain = constrain,
+            color = drawColorProvider(),
+            width = drawStrokeWidth,
+            shapeEdgeSpacing = shapeEdgeSpacing,
+            ellipseSegments = ellipseSegments,
+            toAnchor = coordinateMapper::viewPointToAnchor
+        )
+    }
+}
