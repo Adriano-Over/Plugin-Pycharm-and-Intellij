@@ -8,13 +8,8 @@ import com.intellij.openapi.vfs.VirtualFile
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.Graphics
-import java.awt.Graphics2D
-import java.awt.Point
-import java.awt.Rectangle
-import java.awt.RenderingHints
 import javax.swing.JDialog
 import javax.swing.JPanel
-import javax.swing.SwingUtilities
 
 class DrawingCanvasPanel(
     private val project: Project,
@@ -115,6 +110,16 @@ class DrawingCanvasPanel(
         eraseMinMovePx = eraseMinMovePx,
         shapeEdgeSpacing = shapeEdgeSpacing,
         ellipseSegments = ellipseSegments
+    )
+
+    private val canvasPainter = DrawingCanvasPainter(
+        canvas = this,
+        editorProvider = { editor },
+        currentStrokesProvider = ::currentStrokes,
+        shapePreviewProvider = { shapePreview },
+        gridEnabledProvider = { gridEnabled },
+        strokeRenderer = strokeRenderer,
+        strokeWorkspace = strokeWorkspace
     )
 
     init {
@@ -237,75 +242,6 @@ class DrawingCanvasPanel(
 
     override fun paintComponent(graphics: Graphics) {
         super.paintComponent(graphics)
-        val currentEditor = editor ?: return
-        val g = graphics as Graphics2D
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-
-        val clip = g.clipBounds ?: Rectangle(0, 0, width, height)
-        val lineHeight = currentEditor.lineHeight.takeIf { it > 0 } ?: 16
-
-        if (gridEnabled) {
-            strokeRenderer.paintGridWithEdge(
-                g = g,
-                cellSize = lineHeight,
-                clip = clip,
-                width = width,
-                height = height
-            )
-        }
-
-        val visibleLineRange = DrawingViewportTools.resolveVisibleLineRange(this, currentEditor, clip)
-        val boundsMap = strokeWorkspace.currentStrokeBounds()
-
-        val contentOrigin = SwingUtilities.convertPoint(currentEditor.contentComponent, Point(0, 0), this)
-        val contentClip = Rectangle(
-            clip.x - contentOrigin.x,
-            clip.y - contentOrigin.y,
-            clip.width,
-            clip.height
-        )
-        val gContent = g.create() as Graphics2D
-        gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
-
-        for (stroke in currentStrokes()) {
-            val bounds = boundsMap[stroke.id]
-                ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
-            if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
-                paintStroke(gContent, stroke, visibleContentClip = contentClip)
-            }
-        }
-
-        shapePreview?.let {
-            val previewBounds = DrawingViewportTools.computeStrokeLineBounds(it)
-            if (previewBounds != null &&
-                previewBounds.maxLine >= visibleLineRange.first &&
-                previewBounds.minLine <= visibleLineRange.second
-            ) {
-                paintStroke(gContent, it, preview = true, visibleContentClip = contentClip)
-            }
-        }
-
-        gContent.dispose()
-    }
-
-    private fun paintStroke(
-        g: Graphics2D,
-        stroke: StrokePath,
-        preview: Boolean = false,
-        visibleContentClip: Rectangle? = null
-    ) {
-        val geometry = if (preview) {
-            strokeWorkspace.buildStrokeGeometryContent(stroke)
-        } else {
-            strokeWorkspace.getOrBuildStrokeGeometryContent(stroke)
-        } ?: return
-
-        strokeRenderer.paintStroke(
-            g = g,
-            stroke = stroke,
-            geometry = geometry,
-            preview = preview,
-            visibleContentClip = visibleContentClip
-        )
+        canvasPainter.paint(graphics)
     }
 }
