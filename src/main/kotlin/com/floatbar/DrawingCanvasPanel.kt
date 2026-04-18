@@ -15,8 +15,6 @@ import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.RenderingHints
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
 import javax.swing.JDialog
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
@@ -51,9 +49,7 @@ class DrawingCanvasPanel(
     private var currentStroke: StrokePath? = null
     private var currentTool = FloatBarToolMode.DRAW
     private var selectedShapeKind: ShapeKind = ShapeKind.RECTANGLE
-    private var shapeStartPoint: Point? = null
     private var shapePreview: StrokePath? = null
-    private var lastDragPoint: Point? = null
 
     private var drawColor = Color(255, 0, 0, 210)
     private var gridEnabled = true
@@ -86,158 +82,23 @@ class DrawingCanvasPanel(
         isOpaque = false
         preferredSize = Dimension(10, 10)
 
-        val mouseHandler = object : MouseAdapter() {
-            override fun mousePressed(e: MouseEvent) {
-                when (currentTool) {
-                    FloatBarToolMode.FILL -> {
-                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
-                        saveStateForUndo()
-                        val filledStrokes = PaintGeometryEngine.fillAt(
-                            strokes = currentStrokes(),
-                            seedPoint = safePoint,
-                            fillColor = drawColor,
-                            panelBounds = Rectangle(
-                                -canvasPadding,
-                                -canvasPadding,
-                                width + canvasPadding * 2,
-                                height + canvasPadding * 2
-                            ),
-                            toViewPoint = coordinateMapper::toViewPoint
-                        )
-                        if (filledStrokes.isNotEmpty()) {
-                            for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
-                                addStrokeToCurrentDocument(stroke)
-                            }
-                            schedulePersistCurrentStrokes()
-                            refreshHistoryState()
-                            repaint()
-                        }
-                        lastDragPoint = null
-                    }
+        val inputController = DrawingInputController(
+            currentToolProvider = { currentTool },
+            clampPoint = coordinateMapper::clampPointToDrawableArea,
+            onFillPressed = ::handleFillPressed,
+            onErasePressed = ::handleErasePressed,
+            onEraseDragged = ::handleEraseDragged,
+            onEraseReleased = ::handleEraseReleased,
+            onShapePressed = ::handleShapePressed,
+            onShapeDragged = ::handleShapeDragged,
+            onShapeReleased = ::handleShapeReleased,
+            onDrawPressed = ::handleDrawPressed,
+            onDrawDragged = ::handleDrawDragged,
+            onDrawReleased = ::handleDrawReleased
+        )
 
-                    FloatBarToolMode.ERASE -> {
-                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
-                        saveStateForUndo()
-                        applyErasePath(listOf(safePoint))
-                        lastDragPoint = safePoint
-                        repaintAround(listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
-                    }
-
-                    FloatBarToolMode.SHAPES -> {
-                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
-                        saveStateForUndo()
-                        shapeStartPoint = safePoint
-                        shapePreview = null
-                        lastDragPoint = safePoint
-                    }
-
-                    else -> {
-                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
-                        saveStateForUndo()
-                        val stroke = StrokePath(color = drawColor, width = 3.5f)
-                        currentStroke = stroke
-                        addStrokeToCurrentDocument(stroke)
-                        addAnchorPoint(stroke, safePoint)
-                        lastDragPoint = safePoint
-                        repaintAround(listOf(safePoint))
-                    }
-                }
-            }
-
-            override fun mouseDragged(e: MouseEvent) {
-                when (currentTool) {
-                    FloatBarToolMode.FILL -> return
-
-                    FloatBarToolMode.ERASE -> {
-                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
-                        val previous = lastDragPoint
-
-                        if (previous == null) {
-                            applyErasePath(listOf(safePoint))
-                            lastDragPoint = safePoint
-                            repaintAround(listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
-                            return
-                        }
-
-                        if (previous.distance(safePoint) < eraseMinMovePx) {
-                            return
-                        }
-
-                        val samples = buildEraseSamples(previous, safePoint)
-                        applyErasePath(samples)
-                        lastDragPoint = safePoint
-                        repaintAround(samples, dirtyPaddingPx + eraseRadius.roundToInt())
-                    }
-
-                    FloatBarToolMode.SHAPES -> {
-                        val start = shapeStartPoint ?: return
-                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
-                        val oldPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
-                        shapePreview = buildShapeStroke(start, safePoint, selectedShapeKind, e.isShiftDown)
-                        val newPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
-                        lastDragPoint = safePoint
-                        repaintAround(oldPreviewPoints + newPreviewPoints + listOf(start, safePoint))
-                    }
-
-                    else -> {
-                        val stroke = currentStroke ?: return
-                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
-                        val previous = lastDragPoint
-                        if (previous == null) {
-                            addAnchorPoint(stroke, safePoint)
-                            repaintAround(listOf(safePoint))
-                        } else {
-                            val samples = buildDrawSamples(previous, safePoint)
-                            for (p in samples) {
-                                addAnchorPoint(stroke, p)
-                            }
-                            repaintAround(samples + listOf(previous, safePoint))
-                        }
-                        lastDragPoint = safePoint
-                    }
-                }
-            }
-
-            override fun mouseReleased(e: MouseEvent) {
-                when (currentTool) {
-                    FloatBarToolMode.ERASE -> {
-                        lastDragPoint = null
-                        schedulePersistCurrentStrokes()
-                        refreshHistoryState()
-                        repaint()
-                    }
-
-                    FloatBarToolMode.SHAPES -> {
-                        val preview = shapePreview
-                        if (preview != null && preview.points.size >= 2) {
-                            val committed = preview.deepCopy()
-                            addStrokeToCurrentDocument(committed)
-                            schedulePersistCurrentStrokes()
-                            refreshHistoryState()
-                        }
-                        shapeStartPoint = null
-                        shapePreview = null
-                        lastDragPoint = null
-                        repaint()
-                    }
-
-                    FloatBarToolMode.FILL -> {
-                        lastDragPoint = null
-                    }
-
-                    else -> {
-                        currentStroke?.let { simplifyFreehandStrokeInPlace(it) }
-                        currentStroke = null
-                        lastDragPoint = null
-                        schedulePersistCurrentStrokes()
-                        refreshHistoryState()
-                    }
-                }
-            }
-        }
-
-        addMouseListener(mouseHandler)
-        addMouseMotionListener(mouseHandler)
+        addMouseListener(inputController)
+        addMouseMotionListener(inputController)
     }
 
     fun bindEditor(editor: Editor) {
@@ -260,7 +121,6 @@ class DrawingCanvasPanel(
         currentFile = null
         currentStroke = null
         shapePreview = null
-        lastDragPoint = null
         repaint()
     }
 
@@ -393,8 +253,6 @@ class DrawingCanvasPanel(
         return strokeStore.currentStrokeGeometries(document)
     }
 
-    private fun snapshotCurrentStrokes(): List<StrokePath> = currentStrokes().map { it.deepCopy() }
-
     private fun saveStateForUndo() {
         val document = editor?.document ?: return
         historyStore.saveStateForUndo(document, currentStrokes())
@@ -490,6 +348,112 @@ class DrawingCanvasPanel(
     private fun persistCurrentStrokes() {
         persistenceTimer?.stop()
         strokeStore.persistStrokes(currentFile?.path, currentStrokes())
+    }
+
+    internal fun handleFillPressed(safePoint: Point) {
+        saveStateForUndo()
+        val filledStrokes = PaintGeometryEngine.fillAt(
+            strokes = currentStrokes(),
+            seedPoint = safePoint,
+            fillColor = drawColor,
+            panelBounds = Rectangle(
+                -canvasPadding,
+                -canvasPadding,
+                width + canvasPadding * 2,
+                height + canvasPadding * 2
+            ),
+            toViewPoint = coordinateMapper::toViewPoint
+        )
+        if (filledStrokes.isNotEmpty()) {
+            for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
+                addStrokeToCurrentDocument(stroke)
+            }
+            schedulePersistCurrentStrokes()
+            refreshHistoryState()
+            repaint()
+        }
+    }
+
+    internal fun handleErasePressed(safePoint: Point) {
+        saveStateForUndo()
+        applyErasePath(listOf(safePoint))
+        repaintAround(listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
+    }
+
+    internal fun handleEraseDragged(previous: Point?, safePoint: Point) {
+        if (previous == null) {
+            applyErasePath(listOf(safePoint))
+            repaintAround(listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
+            return
+        }
+
+        if (previous.distance(safePoint) < eraseMinMovePx) {
+            return
+        }
+
+        val samples = buildEraseSamples(previous, safePoint)
+        applyErasePath(samples)
+        repaintAround(samples, dirtyPaddingPx + eraseRadius.roundToInt())
+    }
+
+    internal fun handleEraseReleased() {
+        schedulePersistCurrentStrokes()
+        refreshHistoryState()
+        repaint()
+    }
+
+    internal fun handleShapePressed(@Suppress("UNUSED_PARAMETER") safePoint: Point) {
+        saveStateForUndo()
+        shapePreview = null
+    }
+
+    internal fun handleShapeDragged(start: Point, safePoint: Point, isShiftDown: Boolean) {
+        val oldPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
+        shapePreview = buildShapeStroke(start, safePoint, selectedShapeKind, isShiftDown)
+        val newPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
+        repaintAround(oldPreviewPoints + newPreviewPoints + listOf(start, safePoint))
+    }
+
+    internal fun handleShapeReleased() {
+        val preview = shapePreview
+        if (preview != null && preview.points.size >= 2) {
+            val committed = preview.deepCopy()
+            addStrokeToCurrentDocument(committed)
+            schedulePersistCurrentStrokes()
+            refreshHistoryState()
+        }
+        shapePreview = null
+        repaint()
+    }
+
+    internal fun handleDrawPressed(safePoint: Point) {
+        saveStateForUndo()
+        val stroke = StrokePath(color = drawColor, width = 3.5f)
+        currentStroke = stroke
+        addStrokeToCurrentDocument(stroke)
+        addAnchorPoint(stroke, safePoint)
+        repaintAround(listOf(safePoint))
+    }
+
+    internal fun handleDrawDragged(previous: Point?, safePoint: Point) {
+        val stroke = currentStroke ?: return
+        if (previous == null) {
+            addAnchorPoint(stroke, safePoint)
+            repaintAround(listOf(safePoint))
+        } else {
+            val samples = buildDrawSamples(previous, safePoint)
+            for (p in samples) {
+                addAnchorPoint(stroke, p)
+            }
+            repaintAround(samples + listOf(previous, safePoint))
+        }
+    }
+
+    internal fun handleDrawReleased() {
+        currentStroke?.let { simplifyFreehandStrokeInPlace(it) }
+        currentStroke = null
+        schedulePersistCurrentStrokes()
+        refreshHistoryState()
     }
 
     private fun applyErasePath(points: List<Point>) {
@@ -608,13 +572,6 @@ class DrawingCanvasPanel(
             )
         }
         return points
-    }
-
-    private fun addInterpolatedPoints(stroke: StrokePath, from: Point, to: Point) {
-        val samples = buildDrawSamples(from, to)
-        for (p in samples) {
-            addAnchorPoint(stroke, p)
-        }
     }
 
     private fun addAnchorPoint(stroke: StrokePath, point: Point) {
@@ -890,5 +847,4 @@ class DrawingCanvasPanel(
             visibleContentClip = visibleContentClip
         )
     }
-
 }
