@@ -18,5 +18,19 @@
                 factoryClass="com.floatbar.FloatingBarToolWindowFactory"
                 canCloseContents="false"
                 secondary="true"/>
+
+        <statusBarWidgetFactory
+                id="FloatBarStatusBarWidget"
+                implementation="com.floatbar.FloatBarStatusBarWidgetFactory"/>
     </extensions>
+
+    <actions>
+        <action
+                id="com.floatbar.ToggleFloatBar"
+                class="com.floatbar.FloatBarToggleAction"
+                text="Toggle FloatBar"
+                description="Show or hide the FloatBar overlay">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>
