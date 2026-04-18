@@ -38,9 +38,9 @@ class DrawingCanvasPanel(
     private var editor: Editor? = null
     private var currentFile: VirtualFile? = null
 
-    private val strokesByDocument = mutableMapOf<Document, MutableList<StrokePath>>()
-    private val strokeBoundsByDocument = mutableMapOf<Document, MutableMap<Long, StrokeLineBounds>>()
-    private val strokeGeometryByDocument = mutableMapOf<Document, MutableMap<Long, StrokeGeometryContent>>()
+    private val strokeStore = DrawingStrokeStore(
+        stateService = project.service<FloatBarDrawingStateService>()
+    )
     private val historyStore = DrawingHistoryStore(maxUndoDepth = 50)
 
     private var documentListener: DocumentListener? = null
@@ -310,9 +310,7 @@ class DrawingCanvasPanel(
     fun clearCanvas() {
         val document = editor?.document ?: return
         saveStateForUndo()
-        strokesByDocument[document] = mutableListOf()
-        strokeBoundsByDocument[document] = mutableMapOf()
-        strokeGeometryByDocument[document] = mutableMapOf()
+        strokeStore.clearDocument(document)
         currentStroke = null
         shapePreview = null
         persistCurrentStrokes()
@@ -323,7 +321,7 @@ class DrawingCanvasPanel(
     fun undo() {
         val document = editor?.document ?: return
         val restored = historyStore.restoreUndo(document, currentStrokes()) ?: return
-        strokesByDocument[document] = restored.toMutableList()
+        strokeStore.setStrokes(document, restored.toMutableList())
         rebuildStrokeBounds(document)
         resetStrokeGeometryCache(document)
         persistCurrentStrokes()
@@ -334,7 +332,7 @@ class DrawingCanvasPanel(
     fun redo() {
         val document = editor?.document ?: return
         val restored = historyStore.restoreRedo(document, currentStrokes()) ?: return
-        strokesByDocument[document] = restored.toMutableList()
+        strokeStore.setStrokes(document, restored.toMutableList())
         rebuildStrokeBounds(document)
         resetStrokeGeometryCache(document)
         persistCurrentStrokes()
@@ -360,7 +358,7 @@ class DrawingCanvasPanel(
     private fun bindDocumentListener(document: Document) {
         val listener = object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
-                coordinateMapper.remapAnchorsForDocumentChange(document, event, strokesByDocument[document].orEmpty())
+                coordinateMapper.remapAnchorsForDocumentChange(document, event, strokeStore.currentStrokes(document))
                 rebuildStrokeBounds(document)
                 resetStrokeGeometryCache(document)
                 schedulePersistCurrentStrokes()
@@ -382,17 +380,17 @@ class DrawingCanvasPanel(
 
     private fun currentStrokes(): MutableList<StrokePath> {
         val document = editor?.document ?: return mutableListOf()
-        return strokesByDocument.getOrPut(document) { mutableListOf() }
+        return strokeStore.currentStrokes(document)
     }
 
     private fun currentStrokeBounds(): MutableMap<Long, StrokeLineBounds> {
         val document = editor?.document ?: return mutableMapOf()
-        return strokeBoundsByDocument.getOrPut(document) { mutableMapOf() }
+        return strokeStore.currentStrokeBounds(document)
     }
 
     private fun currentStrokeGeometries(): MutableMap<Long, StrokeGeometryContent> {
         val document = editor?.document ?: return mutableMapOf()
-        return strokeGeometryByDocument.getOrPut(document) { mutableMapOf() }
+        return strokeStore.currentStrokeGeometries(document)
     }
 
     private fun snapshotCurrentStrokes(): List<StrokePath> = currentStrokes().map { it.deepCopy() }
@@ -414,12 +412,15 @@ class DrawingCanvasPanel(
     }
 
     private fun rebuildStrokeBounds(document: Document) {
-        val strokes = strokesByDocument[document] ?: mutableListOf()
+        val strokes = strokeStore.currentStrokes(document)
         val rebuilt = mutableMapOf<Long, StrokeLineBounds>()
         for (stroke in strokes) {
             computeStrokeLineBounds(stroke)?.let { rebuilt[stroke.id] = it }
         }
-        strokeBoundsByDocument[document] = rebuilt
+        strokeStore.currentStrokeBounds(document).apply {
+            clear()
+            putAll(rebuilt)
+        }
     }
 
     private fun computeStrokeLineBounds(stroke: StrokePath): StrokeLineBounds? {
@@ -459,7 +460,7 @@ class DrawingCanvasPanel(
     }
 
     private fun resetStrokeGeometryCache(document: Document) {
-        strokeGeometryByDocument[document] = mutableMapOf()
+        strokeStore.currentStrokeGeometries(document).clear()
     }
 
     private fun schedulePersistCurrentStrokes() {
@@ -479,66 +480,16 @@ class DrawingCanvasPanel(
         val editor = editor ?: return
         val document = editor.document
         val filePath = currentFile?.path ?: return
-        val stateService = project.service<FloatBarDrawingStateService>()
-        val loaded = stateService.getStrokes(filePath).map { saved ->
-            StrokePath(
-                color = Color(saved.color, true),
-                width = saved.width,
-                points = saved.points.map { point ->
-                    val hasOffset = point.offset > 0 || point.line > 0 || point.column > 0
-                    val anchor = if (hasOffset) {
-                        AnchorPoint(
-                            line = point.line,
-                            column = point.column,
-                            dx = point.dx,
-                            dy = point.dy,
-                            offset = point.offset
-                        )
-                    } else {
-                        AnchorPoint(
-                            line = point.line,
-                            column = 0,
-                            dx = point.x,
-                            dy = point.dy,
-                            offset = 0
-                        )
-                    }
-                    coordinateMapper.normalizeAnchor(document, anchor)
-                    anchor
-                }.toMutableList(),
-                filled = saved.filled,
-                kind = saved.kind?.let { runCatching { ShapeKind.valueOf(it) }.getOrNull() }
-            )
-        }.toMutableList()
-        strokesByDocument[document] = loaded
+        strokeStore.loadPersistedStrokes(filePath, document) { doc, anchor ->
+            coordinateMapper.normalizeAnchor(doc, anchor)
+        }
         rebuildStrokeBounds(document)
         resetStrokeGeometryCache(document)
     }
 
     private fun persistCurrentStrokes() {
         persistenceTimer?.stop()
-
-        val filePath = currentFile?.path ?: return
-        val stateService = project.service<FloatBarDrawingStateService>()
-        val saved = currentStrokes().map { stroke ->
-            SavedStroke(
-                color = stroke.color.rgb,
-                width = stroke.width,
-                points = stroke.points.map { point ->
-                    SavedPoint(
-                        line = point.line,
-                        column = point.column,
-                        dx = point.dx,
-                        dy = point.dy,
-                        offset = point.offset,
-                        x = 0
-                    )
-                }.toMutableList(),
-                filled = stroke.filled,
-                kind = stroke.kind?.name
-            )
-        }
-        stateService.setStrokes(filePath, saved)
+        strokeStore.persistStrokes(currentFile?.path, currentStrokes())
     }
 
     private fun applyErasePath(points: List<Point>) {
@@ -604,7 +555,7 @@ class DrawingCanvasPanel(
             }
         }
 
-        strokesByDocument[document] = merged
+        strokeStore.setStrokes(document, merged)
     }
 
     private fun computeEraseCandidateLineRange(points: List<Point>): Pair<Int, Int> {
@@ -767,11 +718,6 @@ class DrawingCanvasPanel(
         val projY = a.y + clamped * dy
         return hypot(p.x - projX, p.y - projY)
     }
-
-    private data class StrokeLineBounds(
-        val minLine: Int,
-        val maxLine: Int
-    )
 
     private fun convertViewStrokeToAnchors(stroke: StrokePath): StrokePath {
         val converted = stroke.points.mapNotNull { source ->
