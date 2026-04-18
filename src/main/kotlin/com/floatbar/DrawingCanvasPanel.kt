@@ -41,8 +41,7 @@ class DrawingCanvasPanel(
     private val strokesByDocument = mutableMapOf<Document, MutableList<StrokePath>>()
     private val strokeBoundsByDocument = mutableMapOf<Document, MutableMap<Long, StrokeLineBounds>>()
     private val strokeGeometryByDocument = mutableMapOf<Document, MutableMap<Long, StrokeGeometryContent>>()
-    private val undoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
-    private val redoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
+    private val historyStore = DrawingHistoryStore(maxUndoDepth = 50)
 
     private var documentListener: DocumentListener? = null
     private var persistenceTimer: Timer? = null
@@ -323,12 +322,8 @@ class DrawingCanvasPanel(
 
     fun undo() {
         val document = editor?.document ?: return
-        val undo = undoByDocument.getOrPut(document) { mutableListOf() }
-        if (undo.isEmpty()) return
-        val redo = redoByDocument.getOrPut(document) { mutableListOf() }
-        redo += snapshotCurrentStrokes()
-        val restored = undo.removeAt(undo.lastIndex)
-        strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
+        val restored = historyStore.restoreUndo(document, currentStrokes()) ?: return
+        strokesByDocument[document] = restored.toMutableList()
         rebuildStrokeBounds(document)
         resetStrokeGeometryCache(document)
         persistCurrentStrokes()
@@ -338,12 +333,8 @@ class DrawingCanvasPanel(
 
     fun redo() {
         val document = editor?.document ?: return
-        val redo = redoByDocument.getOrPut(document) { mutableListOf() }
-        if (redo.isEmpty()) return
-        val undo = undoByDocument.getOrPut(document) { mutableListOf() }
-        undo += snapshotCurrentStrokes()
-        val restored = redo.removeAt(redo.lastIndex)
-        strokesByDocument[document] = restored.map { it.deepCopy() }.toMutableList()
+        val restored = historyStore.restoreRedo(document, currentStrokes()) ?: return
+        strokesByDocument[document] = restored.toMutableList()
         rebuildStrokeBounds(document)
         resetStrokeGeometryCache(document)
         persistCurrentStrokes()
@@ -351,8 +342,8 @@ class DrawingCanvasPanel(
         repaint()
     }
 
-    fun canUndo(): Boolean = editor?.document?.let { undoByDocument[it]?.isNotEmpty() == true } == true
-    fun canRedo(): Boolean = editor?.document?.let { redoByDocument[it]?.isNotEmpty() == true } == true
+    fun canUndo(): Boolean = historyStore.canUndo(editor?.document)
+    fun canRedo(): Boolean = historyStore.canRedo(editor?.document)
 
     fun isGridEnabled(): Boolean = gridEnabled
 
@@ -408,10 +399,7 @@ class DrawingCanvasPanel(
 
     private fun saveStateForUndo() {
         val document = editor?.document ?: return
-        val undo = undoByDocument.getOrPut(document) { mutableListOf() }
-        undo += snapshotCurrentStrokes()
-        if (undo.size > 50) undo.removeAt(0)
-        redoByDocument.getOrPut(document) { mutableListOf() }.clear()
+        historyStore.saveStateForUndo(document, currentStrokes())
         refreshHistoryState()
     }
 
