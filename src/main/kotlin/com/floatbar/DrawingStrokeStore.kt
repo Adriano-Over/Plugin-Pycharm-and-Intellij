@@ -2,6 +2,7 @@ package com.floatbar
 
 import com.intellij.openapi.editor.Document
 import java.awt.Color
+import java.util.WeakHashMap
 
 data class StrokeLineBounds(
     val minLine: Int,
@@ -11,9 +12,9 @@ data class StrokeLineBounds(
 class DrawingStrokeStore(
     private val stateService: FloatBarDrawingStateService
 ) {
-    private val strokesByDocument = mutableMapOf<Document, MutableList<StrokePath>>()
-    private val strokeBoundsByDocument = mutableMapOf<Document, MutableMap<Long, StrokeLineBounds>>()
-    private val strokeGeometryByDocument = mutableMapOf<Document, MutableMap<Long, StrokeGeometryContent>>()
+    private val strokesByDocument = WeakHashMap<Document, MutableList<StrokePath>>()
+    private val strokeBoundsByDocument = WeakHashMap<Document, MutableMap<Long, StrokeLineBounds>>()
+    private val strokeGeometryByDocument = WeakHashMap<Document, MutableMap<Long, StrokeGeometryContent>>()
 
     fun currentStrokes(document: Document?): MutableList<StrokePath> {
         if (document == null) return mutableListOf()

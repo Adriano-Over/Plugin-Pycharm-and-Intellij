@@ -25,12 +25,21 @@ class FloatingBar(
 
     private var dragX = 0
     private var dragY = 0
-    private val visibilityListeners = mutableListOf<(Boolean) -> Unit>()
+    private val visibilityListeners = linkedSetOf<(Boolean) -> Unit>()
 
     private val recentColorStore = RecentColorStore(project)
     private lateinit var undoButton: JButton
     private lateinit var redoButton: JButton
     private lateinit var shapeButton: JButton
+    private lateinit var drawingButton: JButton
+    private lateinit var erasingButton: JButton
+    private lateinit var fillButton: JButton
+    private lateinit var colorButton: JButton
+    private lateinit var gridButton: JButton
+    private val recentColorButtons = mutableListOf<JButton>()
+    private var activeTool = FloatBarToolMode.DRAW
+    private var startedDefaultActivation = false
+
     private val canvasPanel = DrawingCanvasPanel(
         project = project,
         recentColorStore = recentColorStore,
@@ -45,16 +54,6 @@ class FloatingBar(
         }
     )
     private val overlayController = EditorOverlayController(project, canvasPanel)
-
-    
-    private var startedDefaultActivation = false
-private lateinit var drawingButton: JButton
-    private lateinit var erasingButton: JButton
-    private lateinit var fillButton: JButton
-    private lateinit var colorButton: JButton
-    private lateinit var gridButton: JButton
-    private val recentColorButtons = mutableListOf<JButton>()
-    private var activeTool = FloatBarToolMode.DRAW
 
     init {
         isUndecorated = true
@@ -197,10 +196,6 @@ private lateinit var drawingButton: JButton
         listener(isVisible)
     }
 
-    fun removeVisibilityListener(listener: (Boolean) -> Unit) {
-        visibilityListeners -= listener
-    }
-
     override fun setVisible(visible: Boolean) {
         val changed = isVisible != visible
         super.setVisible(visible)
@@ -259,57 +254,59 @@ private lateinit var drawingButton: JButton
             background = Color(50, 50, 50)
             foreground = Color(220, 220, 220)
             border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
-            margin = Insets(0, 0, 0, 0)
             addActionListener { onClick() }
         }
     }
 
-private fun showShapesMenu() {
-    val menu = JPopupMenu()
-    addShapeMenuItem(menu, "Rectangle", ShapeKind.RECTANGLE)
-    addShapeMenuItem(menu, "Ellipse", ShapeKind.ELLIPSE)
-    addShapeMenuItem(menu, "Line", ShapeKind.LINE)
-    menu.addSeparator()
-    addShapeMenuItem(menu, "Arrow", ShapeKind.ARROW)
-    addShapeMenuItem(menu, "Process", ShapeKind.PROCESS)
-    addShapeMenuItem(menu, "Decision / If", ShapeKind.DECISION)
-    addShapeMenuItem(menu, "Start / End", ShapeKind.START_END)
-    addShapeMenuItem(menu, "Input / Output", ShapeKind.INPUT_OUTPUT)
-    addShapeMenuItem(menu, "Document", ShapeKind.DOCUMENT)
-    addShapeMenuItem(menu, "Connector", ShapeKind.CONNECTOR)
-    menu.show(shapeButton, 0, shapeButton.height)
-}
-
-    private fun addShapeMenuItem(
-        menu: JPopupMenu,
-        label: String,
-        shapeKind: ShapeKind
-    ) {
-        menu.add(JMenuItem(label).apply {
-            addActionListener {
-                canvasPanel.setShapeMode(shapeKind)
-                setActiveTool(FloatBarToolMode.SHAPES)
-                updateShapeButton()
-            }
-        })
+    private fun showShapesMenu() {
+        val menu = JPopupMenu()
+        for (shapeKind in ShapeKind.entries) {
+            menu.add(JMenuItem(shapeKind.displayName).apply {
+                addActionListener {
+                    canvasPanel.setShapeMode(shapeKind)
+                    setActiveTool(FloatBarToolMode.SHAPES)
+                    updateShapeButton()
+                }
+            })
+        }
+        menu.show(shapeButton, 0, shapeButton.height)
     }
 
-    private fun styleButtonInactive(button: JButton) {
-        button.background = Color(50, 50, 50)
-        button.foreground = Color(220, 220, 220)
-        button.border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+    private fun refreshRecentColorButtons() {
+        val colors = recentColorStore.snapshot()
+        recentColorButtons.forEachIndexed { index, button ->
+            val color = colors.getOrNull(index)
+            button.background = color ?: Color(60, 60, 60)
+            button.isEnabled = color != null
+            button.toolTipText = color?.let { "Recent color ${index + 1}" } ?: "Empty recent color slot"
+        }
     }
 
-    private fun styleButtonActive(button: JButton) {
-        button.background = Color(85, 115, 170)
-        button.foreground = Color.WHITE
-        button.border = BorderFactory.createLineBorder(Color(170, 210, 255), 2)
+    private fun updateColorButton() {
+        val color = canvasPanel.getSelectedColor()
+        colorButton.background = color
+        colorButton.foreground = if ((color.red * 299 + color.green * 587 + color.blue * 114) / 1000 < 140) {
+            Color.WHITE
+        } else {
+            Color.BLACK
+        }
     }
 
-    private fun styleButtonDisabled(button: JButton) {
-        button.background = Color(42, 42, 42)
-        button.foreground = Color(120, 120, 120)
-        button.border = BorderFactory.createLineBorder(Color(80, 80, 80), 1)
+    private fun updateGridButton() {
+        gridButton.text = if (canvasPanel.isGridEnabled()) "Grid ON" else "Grid OFF"
+    }
+
+    private fun updateHistoryButtons() {
+        undoButton.isEnabled = canvasPanel.canUndo()
+        redoButton.isEnabled = canvasPanel.canRedo()
+    }
+
+    private fun updateShapeButton() {
+        shapeButton.text = when (activeTool) {
+            FloatBarToolMode.SHAPES -> canvasPanel.getSelectedShapeKind().displayName
+            else -> "Shapes"
+        }
+        shapeButton.toolTipText = "Selected shape: ${canvasPanel.getSelectedShapeKind().displayName}. Click to choose a flowchart or basic shape"
     }
 
     private fun setActiveTool(tool: FloatBarToolMode) {
@@ -318,75 +315,21 @@ private fun showShapesMenu() {
     }
 
     private fun updateToolButtonStyles() {
-        if (!::drawingButton.isInitialized || !::erasingButton.isInitialized || !::fillButton.isInitialized || !::shapeButton.isInitialized) return
-        styleButtonInactive(drawingButton)
-        styleButtonInactive(erasingButton)
-        styleButtonInactive(fillButton)
-        styleButtonInactive(shapeButton)
-        when (activeTool) {
-            FloatBarToolMode.DRAW -> styleButtonActive(drawingButton)
-            FloatBarToolMode.ERASE -> styleButtonActive(erasingButton)
-            FloatBarToolMode.FILL -> styleButtonActive(fillButton)
-            FloatBarToolMode.SHAPES -> styleButtonActive(shapeButton)
-        }
+        applyToolButtonStyle(drawingButton, activeTool == FloatBarToolMode.DRAW)
+        applyToolButtonStyle(erasingButton, activeTool == FloatBarToolMode.ERASE)
+        applyToolButtonStyle(fillButton, activeTool == FloatBarToolMode.FILL)
+        applyToolButtonStyle(shapeButton, activeTool == FloatBarToolMode.SHAPES)
     }
 
-    private fun updateColorButton() {
-        if (!::colorButton.isInitialized) return
-        val color = canvasPanel.getSelectedColor()
-        colorButton.background = Color(color.red, color.green, color.blue)
-        colorButton.foreground = if ((color.red * 0.299 + color.green * 0.587 + color.blue * 0.114) > 186) {
-            Color.BLACK
+    private fun applyToolButtonStyle(button: JButton, active: Boolean) {
+        if (active) {
+            button.background = Color(80, 120, 200)
+            button.foreground = Color.WHITE
+            button.border = BorderFactory.createLineBorder(Color(150, 190, 255), 1)
         } else {
-            Color.WHITE
-        }
-        colorButton.toolTipText = "Current color: #${"%02X%02X%02X".format(color.red, color.green, color.blue)}"
-    }
-
-    private fun updateGridButton() {
-        if (!::gridButton.isInitialized) return
-        val enabled = canvasPanel.isGridEnabled()
-        gridButton.text = if (enabled) "Grid ON" else "Grid OFF"
-        if (enabled) {
-            styleButtonActive(gridButton)
-        } else {
-            styleButtonInactive(gridButton)
-        }
-        gridButton.toolTipText = if (enabled) "Hide overlay grid" else "Show overlay grid"
-    }
-
-    private fun updateShapeButton() {
-    if (!::shapeButton.isInitialized) return
-    shapeButton.text = "Shapes ▾"
-    shapeButton.toolTipText = "Selected shape: ${canvasPanel.getSelectedShapeKind().displayName}. Click to choose a flowchart or basic shape"
-}
-
-    private fun updateHistoryButtons() {
-        if (!::undoButton.isInitialized || !::redoButton.isInitialized) return
-
-        undoButton.isEnabled = canvasPanel.canUndo()
-        redoButton.isEnabled = canvasPanel.canRedo()
-
-        if (undoButton.isEnabled) {
-            styleButtonInactive(undoButton)
-        } else {
-            styleButtonDisabled(undoButton)
-        }
-
-        if (redoButton.isEnabled) {
-            styleButtonInactive(redoButton)
-        } else {
-            styleButtonDisabled(redoButton)
-        }
-    }
-
-    private fun refreshRecentColorButtons() {
-        val recents = recentColorStore.snapshot()
-        recentColorButtons.forEachIndexed { index, button ->
-            val color = recents.getOrNull(index)
-            button.background = color ?: Color(60, 60, 60)
-            button.isEnabled = color != null
-            button.toolTipText = color?.let { "Recent color #${"%02X%02X%02X".format(it.red, it.green, it.blue)}" } ?: "Empty"
+            button.background = Color(50, 50, 50)
+            button.foreground = Color(220, 220, 220)
+            button.border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
         }
     }
 }

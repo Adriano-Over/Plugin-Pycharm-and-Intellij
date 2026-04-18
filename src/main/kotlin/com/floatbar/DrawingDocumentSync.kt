@@ -16,10 +16,13 @@ class DrawingDocumentSync(
     private val onDocumentStrokesRemapped: (Document) -> Unit,
     private val repaintCanvas: () -> Unit
 ) {
+    private var boundDocument: Document? = null
     private var documentListener: DocumentListener? = null
     private var persistenceTimer: Timer? = null
 
     fun bindDocumentListener(document: Document) {
+        unbindDocumentListener()
+
         val listener = object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
                 coordinateMapper.remapAnchorsForDocumentChange(
@@ -32,17 +35,24 @@ class DrawingDocumentSync(
                 repaintCanvas()
             }
         }
+
         document.addDocumentListener(listener)
+        boundDocument = document
         documentListener = listener
     }
 
     fun unbindDocumentListener() {
-        val document = currentEditor()?.document
+        val document = boundDocument
         val listener = documentListener
         if (document != null && listener != null) {
             document.removeDocumentListener(listener)
         }
+        boundDocument = null
         documentListener = null
+    }
+
+    fun cancelPendingPersistence() {
+        persistenceTimer?.stop()
     }
 
     fun loadPersistedStrokes() {
@@ -70,7 +80,7 @@ class DrawingDocumentSync(
     }
 
     fun persistCurrentStrokes() {
-        persistenceTimer?.stop()
+        cancelPendingPersistence()
         strokeStore.persistStrokes(currentFilePath(), currentStrokes())
     }
 }

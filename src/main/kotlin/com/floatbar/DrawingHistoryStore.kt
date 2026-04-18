@@ -1,12 +1,13 @@
 package com.floatbar
 
 import com.intellij.openapi.editor.Document
+import java.util.WeakHashMap
 
 class DrawingHistoryStore(
     private val maxUndoDepth: Int = 50
 ) {
-    private val undoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
-    private val redoByDocument = mutableMapOf<Document, MutableList<List<StrokePath>>>()
+    private val undoByDocument = WeakHashMap<Document, MutableList<List<StrokePath>>>()
+    private val redoByDocument = WeakHashMap<Document, MutableList<List<StrokePath>>>()
 
     fun saveStateForUndo(document: Document, currentStrokes: List<StrokePath>) {
         val undo = undoByDocument.getOrPut(document) { mutableListOf() }
@@ -45,11 +46,6 @@ class DrawingHistoryStore(
     fun canRedo(document: Document?): Boolean {
         if (document == null) return false
         return redoByDocument[document]?.isNotEmpty() == true
-    }
-
-    fun clear(document: Document) {
-        undoByDocument.remove(document)
-        redoByDocument.remove(document)
     }
 
     private fun snapshot(strokes: List<StrokePath>): List<StrokePath> =

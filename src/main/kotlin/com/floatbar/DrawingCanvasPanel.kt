@@ -103,7 +103,7 @@ class DrawingCanvasPanel(
         currentStrokeSetter = { currentStroke = it },
         shapePreviewGetter = { shapePreview },
         shapePreviewSetter = { shapePreview = it },
-        refreshHistoryState = { onHistoryChanged(canUndo(), canRedo()) },
+        refreshHistoryState = ::refreshHistoryState,
         canvasPadding = canvasPadding,
         dirtyPaddingPx = dirtyPaddingPx,
         eraseRadius = eraseRadius,
@@ -149,12 +149,12 @@ class DrawingCanvasPanel(
         documentSync.persistCurrentStrokes()
         documentSync.unbindDocumentListener()
         this.editor = editor
-        this.currentFile = FileDocumentManager.getInstance().getFile(editor.document)
+        currentFile = FileDocumentManager.getInstance().getFile(editor.document)
         currentStroke = null
         shapePreview = null
         documentSync.loadPersistedStrokes()
         documentSync.bindDocumentListener(editor.document)
-        onHistoryChanged(canUndo(), canRedo())
+        refreshHistoryState()
         repaint()
     }
 
@@ -169,30 +169,27 @@ class DrawingCanvasPanel(
     }
 
     fun setDrawingMode() {
-        currentTool = FloatBarToolMode.DRAW
-        shapePreview = null
+        setTool(FloatBarToolMode.DRAW)
     }
 
     fun setErasingMode() {
-        currentTool = FloatBarToolMode.ERASE
-        shapePreview = null
+        setTool(FloatBarToolMode.ERASE)
     }
 
     fun setFillMode() {
-        currentTool = FloatBarToolMode.FILL
-        shapePreview = null
+        setTool(FloatBarToolMode.FILL)
     }
 
     fun setShapeMode(shapeKind: ShapeKind) {
-        currentTool = FloatBarToolMode.SHAPES
         selectedShapeKind = shapeKind
+        setTool(FloatBarToolMode.SHAPES, clearPreview = false)
     }
 
     fun getSelectedShapeKind(): ShapeKind = selectedShapeKind
 
     fun setSelectedColor(color: Color) {
         drawColor = Color(color.red, color.green, color.blue, drawColor.alpha)
-        currentTool = FloatBarToolMode.DRAW
+        setTool(FloatBarToolMode.DRAW)
     }
 
     fun getSelectedColor(): Color = Color(drawColor.red, drawColor.green, drawColor.blue)
@@ -204,7 +201,7 @@ class DrawingCanvasPanel(
             recentColors = recentColorStore.snapshot(),
             onChosen = { selected ->
                 drawColor = Color(selected.red, selected.green, selected.blue, drawColor.alpha)
-                currentTool = FloatBarToolMode.DRAW
+                setTool(FloatBarToolMode.DRAW)
                 recentColorStore.remember(selected)
                 onColorApplied()
             }
@@ -228,14 +225,20 @@ class DrawingCanvasPanel(
 
     fun isGridEnabled(): Boolean = gridEnabled
 
-    fun setGridEnabled(enabled: Boolean) {
-        gridEnabled = enabled
-        repaint()
-    }
-
     fun toggleGrid() {
         gridEnabled = !gridEnabled
         repaint()
+    }
+
+    private fun setTool(tool: FloatBarToolMode, clearPreview: Boolean = true) {
+        currentTool = tool
+        if (clearPreview) {
+            shapePreview = null
+        }
+    }
+
+    private fun refreshHistoryState() {
+        onHistoryChanged(canUndo(), canRedo())
     }
 
     private fun currentStrokes(): MutableList<StrokePath> = strokeWorkspace.currentStrokes()
