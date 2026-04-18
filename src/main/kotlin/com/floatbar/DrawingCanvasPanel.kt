@@ -3,24 +3,20 @@ package com.floatbar
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
-import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
-import java.awt.Polygon
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
-import java.awt.geom.Path2D
 import javax.swing.JDialog
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
@@ -76,6 +72,17 @@ class DrawingCanvasPanel(
     private val shapeEdgeSpacing = 6.0
     private val ellipseSegments = 36
 
+    private val coordinateMapper = DrawingCoordinateMapper(
+        canvas = this,
+        editorProvider = { editor },
+        minCodeClearancePx = minCodeClearancePx
+    )
+
+    private val strokeRenderer = DrawingStrokeRenderer(
+        canvasPadding = canvasPadding,
+        gridExtendLeftPx = gridExtendLeftPx
+    )
+
     init {
         isOpaque = false
         preferredSize = Dimension(10, 10)
@@ -84,7 +91,7 @@ class DrawingCanvasPanel(
             override fun mousePressed(e: MouseEvent) {
                 when (currentTool) {
                     FloatBarToolMode.FILL -> {
-                        val safePoint = clampPointToDrawableArea(e.point) ?: return
+                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
                         saveStateForUndo()
                         val filledStrokes = PaintGeometryEngine.fillAt(
                             strokes = currentStrokes(),
@@ -96,7 +103,7 @@ class DrawingCanvasPanel(
                                 width + canvasPadding * 2,
                                 height + canvasPadding * 2
                             ),
-                            toViewPoint = ::toViewPoint
+                            toViewPoint = coordinateMapper::toViewPoint
                         )
                         if (filledStrokes.isNotEmpty()) {
                             for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
@@ -110,7 +117,7 @@ class DrawingCanvasPanel(
                     }
 
                     FloatBarToolMode.ERASE -> {
-                        val safePoint = clampPointToDrawableArea(e.point) ?: return
+                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
                         saveStateForUndo()
                         applyErasePath(listOf(safePoint))
                         lastDragPoint = safePoint
@@ -118,7 +125,7 @@ class DrawingCanvasPanel(
                     }
 
                     FloatBarToolMode.SHAPES -> {
-                        val safePoint = clampPointToDrawableArea(e.point) ?: return
+                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
                         saveStateForUndo()
                         shapeStartPoint = safePoint
                         shapePreview = null
@@ -126,7 +133,7 @@ class DrawingCanvasPanel(
                     }
 
                     else -> {
-                        val safePoint = clampPointToDrawableArea(e.point) ?: return
+                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
                         saveStateForUndo()
                         val stroke = StrokePath(color = drawColor, width = 3.5f)
                         currentStroke = stroke
@@ -143,7 +150,7 @@ class DrawingCanvasPanel(
                     FloatBarToolMode.FILL -> return
 
                     FloatBarToolMode.ERASE -> {
-                        val safePoint = clampPointToDrawableArea(e.point) ?: return
+                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
                         val previous = lastDragPoint
 
                         if (previous == null) {
@@ -165,17 +172,17 @@ class DrawingCanvasPanel(
 
                     FloatBarToolMode.SHAPES -> {
                         val start = shapeStartPoint ?: return
-                        val safePoint = clampPointToDrawableArea(e.point) ?: return
-                        val oldPreviewPoints = shapePreview?.points?.mapNotNull(::toViewPoint).orEmpty()
+                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
+                        val oldPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
                         shapePreview = buildShapeStroke(start, safePoint, selectedShapeKind, e.isShiftDown)
-                        val newPreviewPoints = shapePreview?.points?.mapNotNull(::toViewPoint).orEmpty()
+                        val newPreviewPoints = shapePreview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
                         lastDragPoint = safePoint
                         repaintAround(oldPreviewPoints + newPreviewPoints + listOf(start, safePoint))
                     }
 
                     else -> {
                         val stroke = currentStroke ?: return
-                        val safePoint = clampPointToDrawableArea(e.point) ?: return
+                        val safePoint = coordinateMapper.clampPointToDrawableArea(e.point) ?: return
                         val previous = lastDragPoint
                         if (previous == null) {
                             addAnchorPoint(stroke, safePoint)
@@ -362,7 +369,7 @@ class DrawingCanvasPanel(
     private fun bindDocumentListener(document: Document) {
         val listener = object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
-                remapAnchorsForDocumentChange(document, event)
+                coordinateMapper.remapAnchorsForDocumentChange(document, event, strokesByDocument[document].orEmpty())
                 rebuildStrokeBounds(document)
                 resetStrokeGeometryCache(document)
                 schedulePersistCurrentStrokes()
@@ -508,7 +515,7 @@ class DrawingCanvasPanel(
                             offset = 0
                         )
                     }
-                    normalizeAnchor(document, anchor)
+                    coordinateMapper.normalizeAnchor(document, anchor)
                     anchor
                 }.toMutableList(),
                 filled = saved.filled,
@@ -579,7 +586,7 @@ class DrawingCanvasPanel(
             strokes = candidates,
             localPoints = points,
             radius = eraseRadius,
-            toViewPoint = ::toViewPoint
+            toViewPoint = coordinateMapper::toViewPoint
         )
 
         if (rebuiltByStroke.isEmpty()) return
@@ -621,9 +628,9 @@ class DrawingCanvasPanel(
         var maxLine = Int.MIN_VALUE
 
         for (point in points) {
-            val clamped = clampPointToDrawableArea(point) ?: continue
+            val clamped = coordinateMapper.clampPointToDrawableArea(point) ?: continue
             val editorPoint = SwingUtilities.convertPoint(this, clamped, editor.contentComponent)
-            val lineInfo = resolveLineInfo(editorPoint) ?: continue
+            val lineInfo = coordinateMapper.resolveLineInfo(editorPoint) ?: continue
             minLine = min(minLine, lineInfo.line)
             maxLine = max(maxLine, lineInfo.line)
         }
@@ -672,7 +679,7 @@ class DrawingCanvasPanel(
     }
 
     private fun addAnchorPoint(stroke: StrokePath, point: Point) {
-        val anchor = viewPointToAnchor(point) ?: return
+        val anchor = coordinateMapper.viewPointToAnchor(point) ?: return
         val last = stroke.points.lastOrNull()
         if (last != null &&
             last.line == anchor.line &&
@@ -711,7 +718,7 @@ class DrawingCanvasPanel(
 
         val resolved = ArrayList<Pair<AnchorPoint, Point>>(points.size)
         for (anchor in points) {
-            val view = toViewPoint(anchor) ?: return points.map { it.copy() }.toMutableList()
+            val view = coordinateMapper.toViewPoint(anchor) ?: return points.map { it.copy() }.toMutableList()
             resolved += anchor.copy() to view
         }
 
@@ -773,102 +780,15 @@ class DrawingCanvasPanel(
         return hypot(p.x - projX, p.y - projY)
     }
 
-    private data class LineInfo(
-        val line: Int,
-        val lineEndColumn: Int,
-        val lineEndOffset: Int,
-        val lineBaseX: Int,
-        val lineBaseY: Int,
-        val lineEndX: Int
-    )
-
     private data class StrokeLineBounds(
         val minLine: Int,
         val maxLine: Int
     )
 
-    private data class StrokeGeometryContent(
-        val path: Path2D.Float?,
-        val polygon: Polygon?,
-        val bounds: Rectangle
-    )
-
-    private fun resolveLineInfo(editorPoint: Point): LineInfo? {
-        val editor = editor ?: return null
-        val document = editor.document
-        if (document.lineCount <= 0) return null
-
-        val logicalAtPoint = editor.xyToLogicalPosition(editorPoint)
-        val safeLine = logicalAtPoint.line.coerceIn(0, document.lineCount - 1)
-        val lineStartOffset = document.getLineStartOffset(safeLine)
-        val lineEndOffset = document.getLineEndOffset(safeLine)
-        val lineEndLogical = editor.offsetToLogicalPosition(lineEndOffset)
-        val lineBase = editor.logicalPositionToXY(LogicalPosition(safeLine, 0))
-        val lineEndPoint = editor.logicalPositionToXY(lineEndLogical)
-
-        return LineInfo(
-            line = safeLine,
-            lineEndColumn = lineEndOffset - lineStartOffset,
-            lineEndOffset = lineEndOffset,
-            lineBaseX = lineBase.x,
-            lineBaseY = lineBase.y,
-            lineEndX = max(lineBase.x, lineEndPoint.x)
-        )
-    }
-
-    private fun clampPointToDrawableArea(point: Point): Point? {
-        val editor = editor ?: return null
-        val editorPoint = SwingUtilities.convertPoint(this, point, editor.contentComponent)
-        val lineInfo = resolveLineInfo(editorPoint) ?: return null
-        val clampedEditorPoint = Point(
-            max(editorPoint.x, lineInfo.lineEndX + minCodeClearancePx),
-            editorPoint.y
-        )
-        return SwingUtilities.convertPoint(editor.contentComponent, clampedEditorPoint, this)
-    }
-
-    private fun viewPointToAnchor(point: Point): AnchorPoint? {
-        val editor = editor ?: return null
-        val safePoint = clampPointToDrawableArea(point) ?: return null
-        val editorPoint = SwingUtilities.convertPoint(this, safePoint, editor.contentComponent)
-        val lineInfo = resolveLineInfo(editorPoint) ?: return null
-
-        return AnchorPoint(
-            line = lineInfo.line,
-            column = lineInfo.lineEndColumn,
-            dx = editorPoint.x - lineInfo.lineEndX,
-            dy = editorPoint.y - lineInfo.lineBaseY,
-            offset = lineInfo.lineEndOffset
-        )
-    }
-
-    private fun toContentPoint(anchor: AnchorPoint): Point? {
-        val editor = editor ?: return null
-        val document = editor.document
-        normalizeAnchor(document, anchor)
-
-        val safeLine = anchor.line.coerceIn(0, document.lineCount.coerceAtLeast(1) - 1)
-        val lineEndOffset = document.getLineEndOffset(safeLine)
-        val lineEndLogical = editor.offsetToLogicalPosition(lineEndOffset)
-        val lineBase = editor.logicalPositionToXY(LogicalPosition(safeLine, 0))
-        val lineEndPoint = editor.logicalPositionToXY(lineEndLogical)
-
-        return Point(
-            max(lineEndPoint.x, lineBase.x) + max(anchor.dx, minCodeClearancePx),
-            lineBase.y + anchor.dy
-        )
-    }
-
-    private fun toViewPoint(anchor: AnchorPoint): Point? {
-        val editor = editor ?: return null
-        val contentPoint = toContentPoint(anchor) ?: return null
-        return SwingUtilities.convertPoint(editor.contentComponent, contentPoint, this)
-    }
-
     private fun convertViewStrokeToAnchors(stroke: StrokePath): StrokePath {
         val converted = stroke.points.mapNotNull { source ->
             val view = Point(source.dx, source.dy)
-            viewPointToAnchor(view)
+            coordinateMapper.viewPointToAnchor(view)
         }.toMutableList()
 
         return StrokePath(
@@ -881,31 +801,10 @@ class DrawingCanvasPanel(
     }
 
     private fun buildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
-        val contentPoints = stroke.points.mapNotNull(::toContentPoint)
-        if (contentPoints.isEmpty()) return null
-
-        val boundsPadding = max(4, ceil(stroke.width.toDouble() / 2.0).toInt() + 2)
-
-        return if (stroke.filled) {
-            if (contentPoints.size < 3) return null
-            val polygon = Polygon()
-            contentPoints.forEach { polygon.addPoint(it.x, it.y) }
-            val bounds = Rectangle(polygon.bounds)
-            bounds.grow(boundsPadding, boundsPadding)
-            StrokeGeometryContent(path = null, polygon = polygon, bounds = bounds)
-        } else {
-            if (contentPoints.size < 2) return null
-            val path = if (stroke.kind == null) {
-                buildSmoothFreehandPath(contentPoints)
-            } else {
-                buildPolylinePath(contentPoints)
-            }
-            StrokeGeometryContent(
-                path = path,
-                polygon = null,
-                bounds = computeGeometryBounds(contentPoints, boundsPadding)
-            )
-        }
+        return strokeRenderer.buildStrokeGeometryContent(
+            stroke = stroke,
+            toContentPoint = coordinateMapper::toContentPoint
+        )
     }
 
     private fun getOrBuildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
@@ -918,86 +817,6 @@ class DrawingCanvasPanel(
         return built
     }
 
-
-    private fun computeGeometryBounds(points: List<Point>, padding: Int): Rectangle {
-        var minX = Int.MAX_VALUE
-        var minY = Int.MAX_VALUE
-        var maxX = Int.MIN_VALUE
-        var maxY = Int.MIN_VALUE
-
-        for (point in points) {
-            minX = min(minX, point.x)
-            minY = min(minY, point.y)
-            maxX = max(maxX, point.x)
-            maxY = max(maxY, point.y)
-        }
-
-        if (minX == Int.MAX_VALUE) {
-            return Rectangle()
-        }
-
-        return Rectangle(
-            minX - padding,
-            minY - padding,
-            (maxX - minX + padding * 2).coerceAtLeast(1),
-            (maxY - minY + padding * 2).coerceAtLeast(1)
-        )
-    }
-
-    private fun remapAnchorsForDocumentChange(document: Document, event: DocumentEvent) {
-        val strokes = strokesByDocument[document] ?: return
-        val editStart = event.offset
-        val replacedEnd = event.offset + event.oldLength
-        val insertedLength = event.newLength
-        val delta = insertedLength - event.oldLength
-
-        for (stroke in strokes) {
-            for (point in stroke.points) {
-                point.offset = remapOffset(point.offset, editStart, replacedEnd, insertedLength, delta)
-                syncAnchorFromOffset(document, point)
-            }
-        }
-    }
-
-    private fun remapOffset(
-        offset: Int,
-        editStart: Int,
-        replacedEnd: Int,
-        insertedLength: Int,
-        delta: Int
-    ): Int {
-        return when {
-            replacedEnd == editStart && offset >= editStart -> offset + insertedLength
-            offset > replacedEnd -> offset + delta
-            offset >= editStart -> editStart + insertedLength
-            else -> offset
-        }.coerceAtLeast(0)
-    }
-
-    private fun normalizeAnchor(document: Document, anchor: AnchorPoint) {
-        val maxOffset = document.textLength.coerceAtLeast(0)
-
-        if (anchor.offset <= 0 && (anchor.line > 0 || anchor.column > 0)) {
-            val safeLine = anchor.line.coerceIn(0, document.lineCount.coerceAtLeast(1) - 1)
-            val lineEnd = document.getLineEndOffset(safeLine)
-            anchor.offset = lineEnd.coerceIn(0, maxOffset)
-        }
-
-        anchor.offset = anchor.offset.coerceIn(0, maxOffset)
-        syncAnchorFromOffset(document, anchor)
-        anchor.dx = max(anchor.dx, minCodeClearancePx)
-    }
-
-    private fun syncAnchorFromOffset(document: Document, anchor: AnchorPoint) {
-        val clampedOffset = anchor.offset.coerceIn(0, document.textLength.coerceAtLeast(0))
-        anchor.offset = clampedOffset
-        val line = document.getLineNumber(clampedOffset)
-        val lineStart = document.getLineStartOffset(line)
-        val lineEnd = document.getLineEndOffset(line)
-        anchor.line = line
-        anchor.column = lineEnd - lineStart
-    }
-
     private fun buildShapeStroke(start: Point, end: Point, kind: ShapeKind, constrain: Boolean): StrokePath {
         return ShapeStrokeFactory.buildShapeStroke(
             start = start,
@@ -1008,7 +827,7 @@ class DrawingCanvasPanel(
             width = 3.5f,
             shapeEdgeSpacing = shapeEdgeSpacing,
             ellipseSegments = ellipseSegments,
-            toAnchor = ::viewPointToAnchor
+            toAnchor = coordinateMapper::viewPointToAnchor
         )
     }
 
@@ -1108,38 +927,13 @@ class DrawingCanvasPanel(
     }
 
     private fun paintGridWithEdge(g: Graphics2D, cellSize: Int, clip: Rectangle) {
-        val startX = -gridExtendLeftPx
-        val major = Color(255, 255, 255, 20)
-        val minor = Color(255, 255, 255, 9)
-
-        val minGridX = (((clip.x - startX) / cellSize) - 1) * cellSize + startX
-        val maxGridX = clip.x + clip.width + cellSize
-        val minGridY = ((clip.y / cellSize) - 1) * cellSize
-        val maxGridY = clip.y + clip.height + cellSize
-
-        var colIndex = ((minGridX - startX) / cellSize)
-        var x = minGridX
-        while (x <= maxGridX) {
-            g.color = if (colIndex % 2 == 0) major else minor
-            g.drawLine(x, clip.y - canvasPadding, x, clip.y + clip.height + canvasPadding)
-            colIndex++
-            x += cellSize
-        }
-
-        var rowIndex = (minGridY / cellSize)
-        var y = minGridY
-        while (y <= maxGridY) {
-            g.color = if (rowIndex % 2 == 0) major else minor
-            g.drawLine(clip.x - canvasPadding, y, clip.x + clip.width + canvasPadding, y)
-            rowIndex++
-            y += cellSize
-        }
-
-        g.color = major
-        if (clip.y <= 0) g.drawLine(0, 0, width - 1, 0)
-        if (clip.y + clip.height >= height - 1) g.drawLine(0, height - 1, width - 1, height - 1)
-        if (clip.x <= 0) g.drawLine(0, 0, 0, height - 1)
-        if (clip.x + clip.width >= width - 1) g.drawLine(width - 1, 0, width - 1, height - 1)
+        strokeRenderer.paintGridWithEdge(
+            g = g,
+            cellSize = cellSize,
+            clip = clip,
+            width = width,
+            height = height
+        )
     }
 
     private fun paintStroke(
@@ -1148,104 +942,19 @@ class DrawingCanvasPanel(
         preview: Boolean = false,
         visibleContentClip: Rectangle? = null
     ) {
-        val alphaColor = if (preview) {
-            Color(stroke.color.red, stroke.color.green, stroke.color.blue, 140)
-        } else {
-            stroke.color
-        }
-
-        g.color = alphaColor
-
         val geometry = if (preview) {
             buildStrokeGeometryContent(stroke)
         } else {
             getOrBuildStrokeGeometryContent(stroke)
         } ?: return
 
-        if (visibleContentClip != null && !geometry.bounds.intersects(visibleContentClip)) {
-            return
-        }
-
-        if (stroke.filled) {
-            val polygon = geometry.polygon ?: return
-            g.fillPolygon(polygon)
-            g.color = Color(alphaColor.red, alphaColor.green, alphaColor.blue, 220)
-            g.stroke = BasicStroke(
-                max(1.5f, stroke.width / 2f),
-                BasicStroke.CAP_ROUND,
-                BasicStroke.JOIN_ROUND
-            )
-            g.drawPolygon(polygon)
-            return
-        }
-
-        g.stroke = if (preview && stroke.kind != null) {
-            BasicStroke(
-                stroke.width,
-                BasicStroke.CAP_ROUND,
-                BasicStroke.JOIN_ROUND,
-                10f,
-                floatArrayOf(10f, 8f),
-                0f
-            )
-        } else {
-            BasicStroke(
-                stroke.width,
-                BasicStroke.CAP_ROUND,
-                BasicStroke.JOIN_ROUND
-            )
-        }
-
-        geometry.path?.let { g.draw(it) }
-    }
-
-    private fun buildPolylinePath(points: List<Point>): Path2D.Float {
-        val path = Path2D.Float()
-        path.moveTo(points.first().x.toDouble(), points.first().y.toDouble())
-        for (point in points.drop(1)) {
-            path.lineTo(point.x.toDouble(), point.y.toDouble())
-        }
-        return path
-    }
-
-    private fun buildSmoothFreehandPath(points: List<Point>): Path2D.Float {
-        val path = Path2D.Float()
-        if (points.isEmpty()) return path
-        if (points.size == 1) {
-            path.moveTo(points[0].x.toDouble(), points[0].y.toDouble())
-            path.lineTo(points[0].x.toDouble(), points[0].y.toDouble())
-            return path
-        }
-        if (points.size == 2) {
-            path.moveTo(points[0].x.toDouble(), points[0].y.toDouble())
-            path.lineTo(points[1].x.toDouble(), points[1].y.toDouble())
-            return path
-        }
-
-        path.moveTo(points[0].x.toDouble(), points[0].y.toDouble())
-
-        for (i in 1 until points.lastIndex) {
-            val current = points[i]
-            val next = points[i + 1]
-            val midX = (current.x + next.x) / 2.0
-            val midY = (current.y + next.y) / 2.0
-            path.quadTo(
-                current.x.toDouble(),
-                current.y.toDouble(),
-                midX,
-                midY
-            )
-        }
-
-        val penultimate = points[points.lastIndex - 1]
-        val last = points.last()
-        path.quadTo(
-            penultimate.x.toDouble(),
-            penultimate.y.toDouble(),
-            last.x.toDouble(),
-            last.y.toDouble()
+        strokeRenderer.paintStroke(
+            g = g,
+            stroke = stroke,
+            geometry = geometry,
+            preview = preview,
+            visibleContentClip = visibleContentClip
         )
-
-        return path
     }
+
 }
