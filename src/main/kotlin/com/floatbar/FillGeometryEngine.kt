@@ -12,6 +12,8 @@ import kotlin.math.max
 
 internal object FillGeometryEngine {
 
+    private const val MAX_FILL_SEGMENT_WIDTH_PX = 9
+
     fun fillAt(
         strokes: List<StrokePath>,
         seedPoint: Point,
@@ -131,7 +133,7 @@ internal object FillGeometryEngine {
                 if (start <= end) {
                     var segStart = start
                     while (segStart <= end) {
-                        val segEnd = minOf(segStart + 6, end)
+                        val segEnd = minOf(segStart + MAX_FILL_SEGMENT_WIDTH_PX - 1, end)
                         result += StrokePath(
                             color = fillColor,
                             width = 2.0f,
