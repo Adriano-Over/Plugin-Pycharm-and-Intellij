@@ -7,6 +7,7 @@ import java.awt.event.MouseEvent
 class DrawingInputController(
     private val currentToolProvider: () -> FloatBarToolMode,
     private val clampPoint: (Point) -> Point?,
+    private val onToolPreviewPointChanged: (Point?) -> Unit,
     private val onFillPressed: (Point) -> Unit,
     private val onErasePressed: (Point) -> Unit,
     private val onEraseDragged: (Point?, Point) -> Unit,
@@ -23,7 +24,12 @@ class DrawingInputController(
     private var lastDragPoint: Point? = null
 
     override fun mousePressed(e: MouseEvent) {
-        val safePoint = clampPoint(e.point) ?: return
+        val safePoint = clampPoint(e.point) ?: run {
+            onToolPreviewPointChanged(null)
+            return
+        }
+        onToolPreviewPointChanged(safePoint)
+
         when (currentToolProvider()) {
             FloatBarToolMode.FILL -> {
                 onFillPressed(safePoint)
@@ -49,7 +55,12 @@ class DrawingInputController(
     }
 
     override fun mouseDragged(e: MouseEvent) {
-        val safePoint = clampPoint(e.point) ?: return
+        val safePoint = clampPoint(e.point) ?: run {
+            onToolPreviewPointChanged(null)
+            return
+        }
+        onToolPreviewPointChanged(safePoint)
+
         when (currentToolProvider()) {
             FloatBarToolMode.FILL -> return
 
@@ -72,6 +83,8 @@ class DrawingInputController(
     }
 
     override fun mouseReleased(e: MouseEvent) {
+        onToolPreviewPointChanged(clampPoint(e.point))
+
         when (currentToolProvider()) {
             FloatBarToolMode.ERASE -> {
                 lastDragPoint = null
@@ -93,5 +106,13 @@ class DrawingInputController(
                 onDrawReleased()
             }
         }
+    }
+
+    override fun mouseMoved(e: MouseEvent) {
+        onToolPreviewPointChanged(clampPoint(e.point))
+    }
+
+    override fun mouseExited(e: MouseEvent) {
+        onToolPreviewPointChanged(null)
     }
 }

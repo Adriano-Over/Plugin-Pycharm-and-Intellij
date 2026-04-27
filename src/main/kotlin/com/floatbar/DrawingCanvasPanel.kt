@@ -6,8 +6,11 @@ import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import java.awt.Color
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.Graphics
+import java.awt.Point
+import kotlin.math.roundToInt
 import javax.swing.JDialog
 import javax.swing.JPanel
 
@@ -30,6 +33,7 @@ class DrawingCanvasPanel(
 
     private var currentStroke: StrokePath? = null
     private var currentTool = FloatBarToolMode.DRAW
+    private var toolPreviewPoint: Point? = null
     private var selectedShapeKind: ShapeKind = ShapeKind.RECTANGLE
     private var shapePreview: StrokePath? = null
 
@@ -119,16 +123,21 @@ class DrawingCanvasPanel(
         shapePreviewProvider = { shapePreview },
         gridEnabledProvider = { gridEnabled },
         strokeRenderer = strokeRenderer,
+        currentToolProvider = { currentTool },
+        toolPreviewPointProvider = { toolPreviewPoint },
+        eraseRadiusProvider = { eraseRadius },
         strokeWorkspace = strokeWorkspace
     )
 
     init {
         isOpaque = false
         preferredSize = Dimension(10, 10)
+        updateToolCursor()
 
         val inputController = DrawingInputController(
             currentToolProvider = { currentTool },
             clampPoint = coordinateMapper::clampPointToDrawableArea,
+            onToolPreviewPointChanged = ::setToolPreviewPoint,
             onFillPressed = canvasController::handleFillPressed,
             onErasePressed = canvasController::handleErasePressed,
             onEraseDragged = canvasController::handleEraseDragged,
@@ -152,6 +161,8 @@ class DrawingCanvasPanel(
         currentFile = FileDocumentManager.getInstance().getFile(editor.document)
         currentStroke = null
         shapePreview = null
+        setToolPreviewPoint(null)
+        updateToolCursor()
         documentSync.loadPersistedStrokes()
         documentSync.bindDocumentListener(editor.document)
         refreshHistoryState()
@@ -165,6 +176,8 @@ class DrawingCanvasPanel(
         currentFile = null
         currentStroke = null
         shapePreview = null
+        setToolPreviewPoint(null)
+        updateToolCursor()
         repaint()
     }
 
@@ -231,9 +244,43 @@ class DrawingCanvasPanel(
     }
 
     private fun setTool(tool: FloatBarToolMode, clearPreview: Boolean = true) {
+        val previousTool = currentTool
         currentTool = tool
         if (clearPreview) {
             shapePreview = null
+        }
+        updateToolCursor()
+        if (previousTool == FloatBarToolMode.ERASE || tool == FloatBarToolMode.ERASE) {
+            repaintToolPreviewAt(toolPreviewPoint)
+        }
+    }
+
+    private fun setToolPreviewPoint(point: Point?) {
+        val oldPoint = toolPreviewPoint
+        if (oldPoint == point) return
+        toolPreviewPoint = point
+
+        if (currentTool == FloatBarToolMode.ERASE) {
+            repaintToolPreviewAt(oldPoint)
+            repaintToolPreviewAt(point)
+        }
+    }
+
+    private fun repaintToolPreviewAt(point: Point?) {
+        if (point == null) return
+        DrawingViewportTools.repaintAround(
+            canvas = this,
+            points = listOf(point),
+            padding = dirtyPaddingPx + eraseRadius.roundToInt() + 4
+        )
+    }
+
+    private fun updateToolCursor() {
+        cursor = when (currentTool) {
+            FloatBarToolMode.DRAW -> Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
+            FloatBarToolMode.ERASE -> Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
+            FloatBarToolMode.FILL -> Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            FloatBarToolMode.SHAPES -> Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
         }
     }
 

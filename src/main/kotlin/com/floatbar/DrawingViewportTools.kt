@@ -5,6 +5,7 @@ import java.awt.Point
 import java.awt.Rectangle
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
@@ -85,6 +86,64 @@ object DrawingViewportTools {
         val h = (maxY - minY + padding * 2).coerceAtLeast(1)
 
         canvas.repaint(x, y, w, h)
+    }
+
+    fun repaintRect(canvas: JPanel, rect: Rectangle?) {
+        if (rect == null) {
+            canvas.repaint()
+            return
+        }
+        canvas.repaint(rect.x, rect.y, rect.width.coerceAtLeast(1), rect.height.coerceAtLeast(1))
+    }
+
+    fun computeStrokeViewBounds(
+        stroke: StrokePath,
+        toViewPoint: (AnchorPoint) -> Point?,
+        extraPadding: Int = 0
+    ): Rectangle? {
+        val points = stroke.points.mapNotNull(toViewPoint)
+        if (points.isEmpty()) return null
+
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+        for (point in points) {
+            minX = min(minX, point.x)
+            minY = min(minY, point.y)
+            maxX = max(maxX, point.x)
+            maxY = max(maxY, point.y)
+        }
+        if (minX == Int.MAX_VALUE) return null
+
+        val padding = extraPadding + ceil(stroke.width.toDouble() / 2.0).toInt() + 2
+        return Rectangle(
+            (minX - padding).coerceAtLeast(0),
+            (minY - padding).coerceAtLeast(0),
+            (maxX - minX + padding * 2).coerceAtLeast(1),
+            (maxY - minY + padding * 2).coerceAtLeast(1)
+        )
+    }
+
+    fun computeStrokesViewBounds(
+        strokes: Iterable<StrokePath>,
+        toViewPoint: (AnchorPoint) -> Point?,
+        extraPadding: Int = 0
+    ): Rectangle? {
+        var union: Rectangle? = null
+        for (stroke in strokes) {
+            val bounds = computeStrokeViewBounds(stroke, toViewPoint, extraPadding) ?: continue
+            union = if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
+        }
+        return union
+    }
+
+    fun unionRectangles(first: Rectangle?, second: Rectangle?): Rectangle? {
+        return when {
+            first == null -> second?.let { Rectangle(it) }
+            second == null -> Rectangle(first)
+            else -> Rectangle(first).apply { add(second) }
+        }
     }
 
     fun resolveVisibleLineRange(

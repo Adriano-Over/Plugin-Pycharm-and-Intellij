@@ -1,13 +1,17 @@
 package com.floatbar
 
 import com.intellij.openapi.editor.Editor
+import java.awt.BasicStroke
+import java.awt.Color
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.RenderingHints
+import java.awt.geom.Ellipse2D
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
+import kotlin.math.ceil
 
 class DrawingCanvasPainter(
     private val canvas: JPanel,
@@ -15,6 +19,9 @@ class DrawingCanvasPainter(
     private val currentStrokesProvider: () -> List<StrokePath>,
     private val shapePreviewProvider: () -> StrokePath?,
     private val gridEnabledProvider: () -> Boolean,
+    private val currentToolProvider: () -> FloatBarToolMode,
+    private val toolPreviewPointProvider: () -> Point?,
+    private val eraseRadiusProvider: () -> Double,
     private val strokeRenderer: DrawingStrokeRenderer,
     private val strokeWorkspace: DrawingStrokeWorkspace
 ) {
@@ -70,6 +77,41 @@ class DrawingCanvasPainter(
             }
         } finally {
             gContent.dispose()
+        }
+
+        paintToolPreview(g)
+    }
+
+    private fun paintToolPreview(g: Graphics2D) {
+        if (currentToolProvider() != FloatBarToolMode.ERASE) return
+        val point = toolPreviewPointProvider() ?: return
+        val radius = ceil(eraseRadiusProvider()).toInt().coerceAtLeast(1)
+
+        val gPreview = g.create() as Graphics2D
+        try {
+            gPreview.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+
+            val diameter = radius * 2
+            val circle = Ellipse2D.Double(
+                (point.x - radius).toDouble(),
+                (point.y - radius).toDouble(),
+                diameter.toDouble(),
+                diameter.toDouble()
+            )
+
+            gPreview.stroke = BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            gPreview.color = Color(255, 255, 255, 190)
+            gPreview.draw(circle)
+
+            gPreview.stroke = BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            gPreview.color = Color(30, 30, 30, 180)
+            gPreview.draw(circle)
+
+            val centerTick = 3
+            gPreview.drawLine(point.x - centerTick, point.y, point.x + centerTick, point.y)
+            gPreview.drawLine(point.x, point.y - centerTick, point.x, point.y + centerTick)
+        } finally {
+            gPreview.dispose()
         }
     }
 

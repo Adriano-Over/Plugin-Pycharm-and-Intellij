@@ -35,35 +35,60 @@ class DrawingCanvasController(
 
     fun clearCanvas() {
         val document = editorProvider()?.document ?: return
+        val dirtyBounds = DrawingViewportTools.computeStrokesViewBounds(
+            strokes = currentStrokesProvider(),
+            toViewPoint = coordinateMapper::toViewPoint,
+            extraPadding = dirtyPaddingPx
+        )
         saveStateForUndo()
         strokeWorkspace.clearDocument(document)
         currentStrokeSetter(null)
         shapePreviewSetter(null)
         documentSync.persistCurrentStrokes()
         refreshHistoryState()
-        canvas.repaint()
+        DrawingViewportTools.repaintRect(canvas, dirtyBounds)
     }
 
     fun undo() {
         val document = editorProvider()?.document ?: return
+        val beforeBounds = DrawingViewportTools.computeStrokesViewBounds(
+            strokes = currentStrokesProvider(),
+            toViewPoint = coordinateMapper::toViewPoint,
+            extraPadding = dirtyPaddingPx
+        )
         val restored = historyStore.restoreUndo(document, currentStrokesProvider()) ?: return
+        val afterBounds = DrawingViewportTools.computeStrokesViewBounds(
+            strokes = restored,
+            toViewPoint = coordinateMapper::toViewPoint,
+            extraPadding = dirtyPaddingPx
+        )
         strokeWorkspace.setStrokes(document, restored.toMutableList())
         strokeWorkspace.rebuildStrokeBounds(document)
         strokeWorkspace.resetStrokeGeometryCache(document)
         documentSync.persistCurrentStrokes()
         refreshHistoryState()
-        canvas.repaint()
+        DrawingViewportTools.repaintRect(canvas, DrawingViewportTools.unionRectangles(beforeBounds, afterBounds))
     }
 
     fun redo() {
         val document = editorProvider()?.document ?: return
+        val beforeBounds = DrawingViewportTools.computeStrokesViewBounds(
+            strokes = currentStrokesProvider(),
+            toViewPoint = coordinateMapper::toViewPoint,
+            extraPadding = dirtyPaddingPx
+        )
         val restored = historyStore.restoreRedo(document, currentStrokesProvider()) ?: return
+        val afterBounds = DrawingViewportTools.computeStrokesViewBounds(
+            strokes = restored,
+            toViewPoint = coordinateMapper::toViewPoint,
+            extraPadding = dirtyPaddingPx
+        )
         strokeWorkspace.setStrokes(document, restored.toMutableList())
         strokeWorkspace.rebuildStrokeBounds(document)
         strokeWorkspace.resetStrokeGeometryCache(document)
         documentSync.persistCurrentStrokes()
         refreshHistoryState()
-        canvas.repaint()
+        DrawingViewportTools.repaintRect(canvas, DrawingViewportTools.unionRectangles(beforeBounds, afterBounds))
     }
 
     fun handleFillPressed(safePoint: Point) {
@@ -81,12 +106,15 @@ class DrawingCanvasController(
             toViewPoint = coordinateMapper::toViewPoint
         )
         if (filledStrokes.isNotEmpty()) {
+            val repaintPoints = filledStrokes.flatMap { stroke ->
+                stroke.points.map { point -> Point(point.dx, point.dy) }
+            }
             for (stroke in filledStrokes.map { convertViewStrokeToAnchors(it) }) {
                 strokeWorkspace.addStroke(stroke)
             }
             documentSync.schedulePersistCurrentStrokes()
             refreshHistoryState()
-            canvas.repaint()
+            DrawingViewportTools.repaintAround(canvas, repaintPoints, dirtyPaddingPx)
         }
     }
 
@@ -115,7 +143,6 @@ class DrawingCanvasController(
     fun handleEraseReleased() {
         documentSync.schedulePersistCurrentStrokes()
         refreshHistoryState()
-        canvas.repaint()
     }
 
     fun handleShapePressed() {
@@ -132,6 +159,7 @@ class DrawingCanvasController(
 
     fun handleShapeReleased() {
         val preview = shapePreviewGetter()
+        val previewPoints = preview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
         if (preview != null && preview.points.size >= 2) {
             val committed = preview.deepCopy()
             strokeWorkspace.addStroke(committed)
@@ -139,7 +167,7 @@ class DrawingCanvasController(
             refreshHistoryState()
         }
         shapePreviewSetter(null)
-        canvas.repaint()
+        DrawingViewportTools.repaintAround(canvas, previewPoints, dirtyPaddingPx)
     }
 
     fun handleDrawPressed(safePoint: Point) {
