@@ -14,9 +14,11 @@ import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JDialog
+import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
+import javax.swing.SwingConstants
 
 class FloatingBar(
     owner: Frame,
@@ -28,6 +30,7 @@ class FloatingBar(
     private val visibilityListeners = linkedSetOf<(Boolean) -> Unit>()
 
     private val recentColorStore = RecentColorStore(project)
+    private lateinit var overlayButton: JButton
     private lateinit var undoButton: JButton
     private lateinit var redoButton: JButton
     private lateinit var shapeButton: JButton
@@ -36,6 +39,7 @@ class FloatingBar(
     private lateinit var fillButton: JButton
     private lateinit var colorButton: JButton
     private lateinit var gridButton: JButton
+    private lateinit var toolStatusLabel: JLabel
     private val recentColorButtons = mutableListOf<JButton>()
     private var activeTool = FloatBarToolMode.DRAW
     private var startedDefaultActivation = false
@@ -53,7 +57,11 @@ class FloatingBar(
             redoButton.isEnabled = canRedo
         }
     )
-    private val overlayController = EditorOverlayController(project, canvasPanel)
+    private val overlayController = EditorOverlayController(
+        project = project,
+        canvasPanel = canvasPanel,
+        onOverlayChanged = ::updateOverlayButtonState
+    )
 
     init {
         isUndecorated = true
@@ -72,6 +80,17 @@ class FloatingBar(
             isOpaque = false
             border = BorderFactory.createEmptyBorder(6, 6, 6, 6)
         }
+        toolStatusLabel = JLabel("Tool: Draw", SwingConstants.CENTER).apply {
+            preferredSize = Dimension(88, 24)
+            maximumSize = Dimension(88, 24)
+            alignmentX = CENTER_ALIGNMENT
+            font = Font("Dialog", Font.BOLD, 11)
+            isOpaque = true
+            background = Color(42, 42, 42)
+            foreground = Color(235, 235, 235)
+            border = BorderFactory.createLineBorder(Color(95, 95, 95), 1)
+            toolTipText = "Current FloatBar tool"
+        }
         val historyRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
             isOpaque = false
             alignmentX = CENTER_ALIGNMENT
@@ -83,44 +102,69 @@ class FloatingBar(
             border = BorderFactory.createEmptyBorder(0, 6, 6, 6)
         }
 
-        val overlayButton = createButton("Overlay") { overlayController.toggle() }
+        overlayButton = createButton("Overlay OFF") {
+            overlayController.toggle()
+        }.apply {
+            toolTipText = "Show the editor drawing overlay"
+        }
         drawingButton = createButton("Draw") {
             canvasPanel.setDrawingMode()
             setActiveTool(FloatBarToolMode.DRAW)
             updateShapeButton()
+        }.apply {
+            toolTipText = "Draw freehand strokes on the editor overlay"
         }
         erasingButton = createButton("Erase") {
             canvasPanel.setErasingMode()
             setActiveTool(FloatBarToolMode.ERASE)
             updateShapeButton()
+        }.apply {
+            toolTipText = "Erase strokes using the current eraser radius"
         }
         colorButton = createButton("Color") {
             canvasPanel.chooseColor(this)
+        }.apply {
+            toolTipText = "Choose the drawing and fill color"
         }
         fillButton = createButton("Fill") {
             canvasPanel.setFillMode()
             setActiveTool(FloatBarToolMode.FILL)
             updateShapeButton()
+        }.apply {
+            toolTipText = "Fill a bounded area with the selected color"
         }
         shapeButton = createButton("Shapes") {
             showShapesMenu()
+        }.apply {
+            toolTipText = "Choose and draw a shape"
         }
         gridButton = createButton("Grid ON") {
             canvasPanel.toggleGrid()
             updateGridButton()
+        }.apply {
+            toolTipText = "Toggle the drawing alignment grid"
         }
         undoButton = createHalfButton("Undo") {
             canvasPanel.undo()
             updateHistoryButtons()
+        }.apply {
+            toolTipText = "Undo the last drawing action"
         }
         redoButton = createHalfButton("Redo") {
             canvasPanel.redo()
             updateHistoryButtons()
+        }.apply {
+            toolTipText = "Redo the last undone drawing action"
         }
         val clearButton = createButton("Clear") {
             canvasPanel.clearCanvas()
             updateHistoryButtons()
+        }.apply {
+            toolTipText = "Clear all drawings from the current editor document"
         }
+
+        buttonColumn.add(toolStatusLabel)
+        buttonColumn.add(Box.createVerticalStrut(6))
 
         listOf(overlayButton, drawingButton, erasingButton, colorButton, fillButton, shapeButton, gridButton).forEach { button ->
             button.alignmentX = CENTER_ALIGNMENT
@@ -165,6 +209,7 @@ class FloatingBar(
 
         updateColorButton()
         refreshRecentColorButtons()
+        updateOverlayButtonState(overlayController.isInstalled())
         updateGridButton()
         updateHistoryButtons()
         updateShapeButton()
@@ -278,7 +323,7 @@ class FloatingBar(
             val color = colors.getOrNull(index)
             button.background = color ?: Color(60, 60, 60)
             button.isEnabled = color != null
-            button.toolTipText = color?.let { "Recent color ${index + 1}" } ?: "Empty recent color slot"
+            button.toolTipText = color?.let { "Recent color ${index + 1}: rgb(${it.red}, ${it.green}, ${it.blue})" } ?: "Empty recent color slot"
         }
     }
 
@@ -290,10 +335,30 @@ class FloatingBar(
         } else {
             Color.BLACK
         }
+        colorButton.toolTipText = "Selected color: rgb(${color.red}, ${color.green}, ${color.blue})"
     }
 
     private fun updateGridButton() {
         gridButton.text = if (canvasPanel.isGridEnabled()) "Grid ON" else "Grid OFF"
+    }
+
+    private fun updateOverlayButtonState(installed: Boolean = overlayController.isInstalled()) {
+        if (!::overlayButton.isInitialized) return
+        overlayButton.text = if (installed) "Overlay ON" else "Overlay OFF"
+        overlayButton.toolTipText = if (installed) {
+            "Hide the editor drawing overlay"
+        } else {
+            "Show the editor drawing overlay"
+        }
+        if (installed) {
+            overlayButton.background = Color(70, 105, 75)
+            overlayButton.foreground = Color.WHITE
+            overlayButton.border = BorderFactory.createLineBorder(Color(130, 190, 135), 1)
+        } else {
+            overlayButton.background = Color(50, 50, 50)
+            overlayButton.foreground = Color(220, 220, 220)
+            overlayButton.border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+        }
     }
 
     private fun updateHistoryButtons() {
@@ -307,6 +372,7 @@ class FloatingBar(
             else -> "Shapes"
         }
         shapeButton.toolTipText = "Selected shape: ${canvasPanel.getSelectedShapeKind().displayName}. Click to choose a flowchart or basic shape"
+        updateToolStatusLabel()
     }
 
     private fun setActiveTool(tool: FloatBarToolMode) {
@@ -319,6 +385,18 @@ class FloatingBar(
         applyToolButtonStyle(erasingButton, activeTool == FloatBarToolMode.ERASE)
         applyToolButtonStyle(fillButton, activeTool == FloatBarToolMode.FILL)
         applyToolButtonStyle(shapeButton, activeTool == FloatBarToolMode.SHAPES)
+        updateToolStatusLabel()
+    }
+
+    private fun updateToolStatusLabel() {
+        val toolText = when (activeTool) {
+            FloatBarToolMode.DRAW -> "Tool: Draw"
+            FloatBarToolMode.ERASE -> "Tool: Erase"
+            FloatBarToolMode.FILL -> "Tool: Fill"
+            FloatBarToolMode.SHAPES -> "Tool: ${canvasPanel.getSelectedShapeKind().displayName}"
+        }
+        toolStatusLabel.text = toolText
+        toolStatusLabel.toolTipText = toolText
     }
 
     private fun applyToolButtonStyle(button: JButton, active: Boolean) {

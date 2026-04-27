@@ -20,7 +20,8 @@ import javax.swing.SwingUtilities
 
 class EditorOverlayController(
     private val project: Project,
-    private val canvasPanel: DrawingCanvasPanel
+    private val canvasPanel: DrawingCanvasPanel,
+    private val onOverlayChanged: (Boolean) -> Unit = {}
 ) : Disposable {
 
     private var overlayInstalled = false
@@ -51,6 +52,12 @@ class EditorOverlayController(
 
     fun isInstalled(): Boolean = overlayInstalled
 
+    private fun setOverlayInstalled(installed: Boolean) {
+        if (overlayInstalled == installed) return
+        overlayInstalled = installed
+        onOverlayChanged(installed)
+    }
+
     fun toggle() {
         if (overlayInstalled) {
             uninstallOverlay()
@@ -60,7 +67,7 @@ class EditorOverlayController(
     }
 
     fun uninstallOverlay() {
-        overlayInstalled = false
+        setOverlayInstalled(false)
         detachListeners()
 
         canvasPanel.parent?.let { parent ->
@@ -111,7 +118,7 @@ class EditorOverlayController(
 
         canvasPanel.bindEditor(editor)
         layeredPane.add(canvasPanel, JLayeredPane.PALETTE_LAYER)
-        overlayInstalled = true
+        setOverlayInstalled(true)
         attachListeners(editor, rootPane)
         updateOverlayBounds()
     }
