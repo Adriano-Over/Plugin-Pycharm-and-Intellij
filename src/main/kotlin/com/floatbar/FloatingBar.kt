@@ -41,6 +41,7 @@ class FloatingBar(
     private lateinit var colorButton: JButton
     private lateinit var gridButton: JButton
     private lateinit var toolStatusLabel: JLabel
+    private lateinit var colorStatusLabel: JLabel
     private val recentColorButtons = mutableListOf<JButton>()
     private var activeTool = FloatBarToolMode.DRAW
     private var startedDefaultActivation = false
@@ -90,6 +91,17 @@ class FloatingBar(
             foreground = Color(235, 235, 235)
             border = BorderFactory.createLineBorder(Color(95, 95, 95), 1)
             toolTipText = "Current FloatBar tool"
+        }
+        colorStatusLabel = JLabel("Color: #000000", SwingConstants.CENTER).apply {
+            preferredSize = Dimension(88, 20)
+            maximumSize = Dimension(88, 20)
+            alignmentX = CENTER_ALIGNMENT
+            font = Font("Dialog", Font.PLAIN, 10)
+            isOpaque = true
+            background = Color(38, 38, 38)
+            foreground = Color(210, 210, 210)
+            border = BorderFactory.createLineBorder(Color(80, 80, 80), 1)
+            toolTipText = "Selected FloatBar color"
         }
         val historyRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
             isOpaque = false
@@ -163,6 +175,8 @@ class FloatingBar(
         }
 
         buttonColumn.add(toolStatusLabel)
+        buttonColumn.add(Box.createVerticalStrut(4))
+        buttonColumn.add(colorStatusLabel)
         buttonColumn.add(Box.createVerticalStrut(6))
 
         listOf(overlayButton, drawingButton, erasingButton, colorButton, fillButton, shapeButton, gridButton).forEach { button ->
@@ -180,7 +194,7 @@ class FloatingBar(
         buttonColumn.add(clearButton)
         buttonColumn.add(Box.createVerticalStrut(6))
 
-        repeat(5) { index ->
+        repeat(6) { index ->
             val swatch = JButton().apply {
                 preferredSize = Dimension(28, 28)
                 minimumSize = Dimension(28, 28)
@@ -318,23 +332,50 @@ class FloatingBar(
 
     private fun refreshRecentColorButtons() {
         val colors = recentColorStore.snapshot()
+        val selectedColor = canvasPanel.getSelectedColor()
         recentColorButtons.forEachIndexed { index, button ->
             val color = colors.getOrNull(index)
+            val isSelected = color?.let { hasSameRgb(it, selectedColor) } == true
             button.background = color ?: Color(60, 60, 60)
             button.isEnabled = color != null
-            button.toolTipText = color?.let { "Recent color ${index + 1}: rgb(${it.red}, ${it.green}, ${it.blue})" } ?: "Empty recent color slot"
+            button.border = when {
+                isSelected -> BorderFactory.createLineBorder(Color(150, 190, 255), 2)
+                color != null -> BorderFactory.createLineBorder(Color(110, 110, 110), 1)
+                else -> BorderFactory.createLineBorder(Color(75, 75, 75), 1)
+            }
+            button.toolTipText = color?.let {
+                val colorDescription = "${toHexColor(it)} / rgb(${it.red}, ${it.green}, ${it.blue})"
+                if (isSelected) {
+                    "Selected recent color ${index + 1}: $colorDescription"
+                } else {
+                    "Recent color ${index + 1}: $colorDescription"
+                }
+            } ?: "Empty recent color slot"
         }
     }
 
     private fun updateColorButton() {
         val color = canvasPanel.getSelectedColor()
+        val colorHex = toHexColor(color)
         colorButton.background = color
         colorButton.foreground = if ((color.red * 299 + color.green * 587 + color.blue * 114) / 1000 < 140) {
             Color.WHITE
         } else {
             Color.BLACK
         }
-        colorButton.toolTipText = "Selected color: rgb(${color.red}, ${color.green}, ${color.blue})"
+        colorButton.toolTipText = "Selected color: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
+        if (::colorStatusLabel.isInitialized) {
+            colorStatusLabel.text = "Color: $colorHex"
+            colorStatusLabel.toolTipText = "Selected color: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
+        }
+    }
+
+    private fun toHexColor(color: Color): String {
+        return "#%02X%02X%02X".format(color.red, color.green, color.blue)
+    }
+
+    private fun hasSameRgb(left: Color, right: Color): Boolean {
+        return left.red == right.red && left.green == right.green && left.blue == right.blue
     }
 
     private fun updateGridButton() {

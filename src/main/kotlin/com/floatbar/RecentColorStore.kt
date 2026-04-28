@@ -44,6 +44,6 @@ class RecentColorStore(
     }
 
     private companion object {
-        const val MAX_COLORS = 5
+        const val MAX_COLORS = 6
     }
 }
