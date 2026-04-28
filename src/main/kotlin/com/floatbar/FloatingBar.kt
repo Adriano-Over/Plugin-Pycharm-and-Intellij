@@ -358,16 +358,23 @@ class FloatingBar(
         val color = canvasPanel.getSelectedColor()
         val colorHex = toHexColor(color)
         colorButton.background = color
-        colorButton.foreground = if ((color.red * 299 + color.green * 587 + color.blue * 114) / 1000 < 140) {
-            Color.WHITE
-        } else {
-            Color.BLACK
-        }
+        colorButton.foreground = readableForegroundFor(color)
         colorButton.text = colorHex
         colorButton.toolTipText = "Click to choose color. Selected: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
         if (::colorStatusLabel.isInitialized) {
             colorStatusLabel.text = "Color: $colorHex"
+            colorStatusLabel.background = color
+            colorStatusLabel.foreground = readableForegroundFor(color)
+            colorStatusLabel.border = BorderFactory.createLineBorder(Color(95, 95, 95), 1)
             colorStatusLabel.toolTipText = "Selected color: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
+        }
+    }
+
+    private fun readableForegroundFor(color: Color): Color {
+        return if ((color.red * 299 + color.green * 587 + color.blue * 114) / 1000 < 140) {
+            Color.WHITE
+        } else {
+            Color.BLACK
         }
     }
 
