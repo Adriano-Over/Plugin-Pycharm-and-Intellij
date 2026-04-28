@@ -15,6 +15,7 @@ import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JDialog
 import javax.swing.JLabel
+import javax.swing.JOptionPane
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
@@ -157,10 +158,9 @@ class FloatingBar(
             toolTipText = "Redo the last undone drawing action"
         }
         val clearButton = createButton("Clear") {
-            canvasPanel.clearCanvas()
-            updateHistoryButtons()
+            confirmAndClearCanvas()
         }.apply {
-            toolTipText = "Clear all drawings from the current editor document"
+            toolTipText = "Clear all drawings from the current editor document. You will be asked to confirm first"
         }
 
         buttonColumn.add(toolStatusLabel)
@@ -364,6 +364,21 @@ class FloatingBar(
     private fun updateHistoryButtons() {
         undoButton.isEnabled = canvasPanel.canUndo()
         redoButton.isEnabled = canvasPanel.canRedo()
+    }
+
+    private fun confirmAndClearCanvas() {
+        val confirmed = JOptionPane.showConfirmDialog(
+            this,
+            "Clear all drawings from the current editor document?",
+            "Clear FloatBar drawings",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        ) == JOptionPane.YES_OPTION
+
+        if (!confirmed) return
+
+        canvasPanel.clearCanvas()
+        updateHistoryButtons()
     }
 
     private fun updateShapeButton() {
