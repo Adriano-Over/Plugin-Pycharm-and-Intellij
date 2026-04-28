@@ -54,8 +54,7 @@ class FloatingBar(
             refreshRecentColorButtons()
         },
         onHistoryChanged = { canUndo, canRedo ->
-            undoButton.isEnabled = canUndo
-            redoButton.isEnabled = canRedo
+            updateHistoryButtonState(canUndo, canRedo)
         }
     )
     private val overlayController = EditorOverlayController(
@@ -339,7 +338,23 @@ class FloatingBar(
     }
 
     private fun updateGridButton() {
-        gridButton.text = if (canvasPanel.isGridEnabled()) "Grid ON" else "Grid OFF"
+        if (!::gridButton.isInitialized) return
+        val enabled = canvasPanel.isGridEnabled()
+        gridButton.text = if (enabled) "Grid ON" else "Grid OFF"
+        gridButton.toolTipText = if (enabled) {
+            "Hide the drawing alignment grid"
+        } else {
+            "Show the drawing alignment grid"
+        }
+        if (enabled) {
+            gridButton.background = Color(70, 105, 75)
+            gridButton.foreground = Color.WHITE
+            gridButton.border = BorderFactory.createLineBorder(Color(130, 190, 135), 1)
+        } else {
+            gridButton.background = Color(50, 50, 50)
+            gridButton.foreground = Color(220, 220, 220)
+            gridButton.border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+        }
     }
 
     private fun updateOverlayButtonState(installed: Boolean = overlayController.isInstalled()) {
@@ -362,8 +377,45 @@ class FloatingBar(
     }
 
     private fun updateHistoryButtons() {
-        undoButton.isEnabled = canvasPanel.canUndo()
-        redoButton.isEnabled = canvasPanel.canRedo()
+        updateHistoryButtonState(
+            canUndo = canvasPanel.canUndo(),
+            canRedo = canvasPanel.canRedo()
+        )
+    }
+
+    private fun updateHistoryButtonState(canUndo: Boolean, canRedo: Boolean) {
+        if (!::undoButton.isInitialized || !::redoButton.isInitialized) return
+        applyHistoryButtonStyle(
+            button = undoButton,
+            enabled = canUndo,
+            enabledTooltip = "Undo the last drawing action",
+            disabledTooltip = "Nothing to undo yet"
+        )
+        applyHistoryButtonStyle(
+            button = redoButton,
+            enabled = canRedo,
+            enabledTooltip = "Redo the last undone drawing action",
+            disabledTooltip = "Nothing to redo yet"
+        )
+    }
+
+    private fun applyHistoryButtonStyle(
+        button: JButton,
+        enabled: Boolean,
+        enabledTooltip: String,
+        disabledTooltip: String
+    ) {
+        button.isEnabled = enabled
+        button.toolTipText = if (enabled) enabledTooltip else disabledTooltip
+        if (enabled) {
+            button.background = Color(50, 50, 50)
+            button.foreground = Color(220, 220, 220)
+            button.border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+        } else {
+            button.background = Color(38, 38, 38)
+            button.foreground = Color(130, 130, 130)
+            button.border = BorderFactory.createLineBorder(Color(70, 70, 70), 1)
+        }
     }
 
     private fun confirmAndClearCanvas() {
