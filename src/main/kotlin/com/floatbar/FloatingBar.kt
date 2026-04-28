@@ -363,7 +363,8 @@ class FloatingBar(
         } else {
             Color.BLACK
         }
-        colorButton.toolTipText = "Selected color: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
+        colorButton.text = colorHex
+        colorButton.toolTipText = "Click to choose color. Selected: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
         if (::colorStatusLabel.isInitialized) {
             colorStatusLabel.text = "Color: $colorHex"
             colorStatusLabel.toolTipText = "Selected color: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
