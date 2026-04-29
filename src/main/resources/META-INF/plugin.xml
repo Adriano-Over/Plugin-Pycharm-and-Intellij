@@ -1,11 +1,25 @@
 <idea-plugin>
     <id>com.floatbar</id>
-    <name>Floatbar</name>
-    <vendor email="support@example.com" url="https://example.com">Floatbar</vendor>
+    <name>FloatBar</name>
+    <vendor url="https://github.com/Adriano-Over/Plugin-Pycharm-and-Intellij">Adriano-Over</vendor>
 
     <description><![CDATA[
-        Floatbar drawing overlay plugin.
+        <p>
+            FloatBar adds a lightweight drawing overlay to JetBrains IDE editors.
+        </p>
+        <p>
+            Use it to sketch freehand notes, erase marks, fill bounded areas, draw basic shapes,
+            toggle a grid, and keep quick visual annotations close to your code.
+        </p>
     ]]></description>
+
+    <change-notes><![CDATA[
+        <ul>
+            <li>Added clearer FloatBar toolbar state and color feedback.</li>
+            <li>Improved overlay, grid, undo, redo, and clear-action polish.</li>
+            <li>Kept drawing, fill, erase, and shape behavior stable.</li>
+        </ul>
+    ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
 
@@ -13,7 +27,7 @@
         <postStartupActivity implementation="com.floatbar.FloatingBarStartupActivity"/>
 
         <toolWindow
-                id="Floatbar"
+                id="FloatBar"
                 anchor="right"
                 factoryClass="com.floatbar.FloatingBarToolWindowFactory"
                 canCloseContents="false"
@@ -29,7 +43,7 @@
                 id="com.floatbar.ToggleFloatBar"
                 class="com.floatbar.FloatBarToggleAction"
                 text="Toggle FloatBar"
-                description="Show or hide the FloatBar overlay">
+                description="Show or hide the FloatBar drawing tools">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
     </actions>
