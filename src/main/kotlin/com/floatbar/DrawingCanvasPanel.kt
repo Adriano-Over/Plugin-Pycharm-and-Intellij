@@ -39,7 +39,7 @@ class DrawingCanvasPanel(
     private var selectedShapeKind: ShapeKind = ShapeKind.RECTANGLE
     private var shapePreview: StrokePath? = null
 
-    private var drawColor = Color(255, 0, 0, 210)
+    private var drawColor = loadPersistedDrawColor()
     private var gridEnabled = drawingStateService.isGridEnabled()
     private val eraseRadius = 9.0
 
@@ -204,6 +204,7 @@ class DrawingCanvasPanel(
 
     fun setSelectedColor(color: Color) {
         drawColor = Color(color.red, color.green, color.blue, drawColor.alpha)
+        persistSelectedColor()
         setTool(FloatBarToolMode.DRAW)
     }
 
@@ -216,6 +217,7 @@ class DrawingCanvasPanel(
             recentColors = recentColorStore.snapshot(),
             onChosen = { selected ->
                 drawColor = Color(selected.red, selected.green, selected.blue, drawColor.alpha)
+                persistSelectedColor()
                 setTool(FloatBarToolMode.DRAW)
                 recentColorStore.remember(selected)
                 onColorApplied()
@@ -238,6 +240,15 @@ class DrawingCanvasPanel(
     fun canUndo(): Boolean = historyStore.canUndo(editor?.document)
     fun canRedo(): Boolean = historyStore.canRedo(editor?.document)
     fun hasDrawings(): Boolean = currentStrokes().isNotEmpty()
+
+    private fun loadPersistedDrawColor(): Color {
+        val saved = Color(drawingStateService.getSelectedColorRgb(), true)
+        return Color(saved.red, saved.green, saved.blue, 210)
+    }
+
+    private fun persistSelectedColor() {
+        drawingStateService.setSelectedColorRgb(Color(drawColor.red, drawColor.green, drawColor.blue).rgb)
+    }
 
     fun isGridEnabled(): Boolean = gridEnabled
 

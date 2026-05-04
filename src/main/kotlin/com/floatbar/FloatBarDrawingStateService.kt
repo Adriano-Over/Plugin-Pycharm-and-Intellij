@@ -35,6 +35,7 @@ data class SavedFileDrawing(
 data class DrawingState(
     var files: MutableList<SavedFileDrawing> = mutableListOf(),
     var recentColors: MutableList<Int> = mutableListOf(),
+    var selectedColorRgb: Int = -65536,
     var gridEnabled: Boolean = true,
     var floatingBarX: Int = UNSET_FLOATING_BAR_POSITION,
     var floatingBarY: Int = UNSET_FLOATING_BAR_POSITION
@@ -85,6 +86,12 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
 
     fun setRecentColors(colors: List<Int>) {
         state.recentColors = colors.toMutableList()
+    }
+
+    fun getSelectedColorRgb(): Int = state.selectedColorRgb
+
+    fun setSelectedColorRgb(rgb: Int) {
+        state.selectedColorRgb = rgb
     }
 
     fun isGridEnabled(): Boolean = state.gridEnabled
