@@ -35,6 +35,7 @@ data class SavedFileDrawing(
 data class DrawingState(
     var files: MutableList<SavedFileDrawing> = mutableListOf(),
     var recentColors: MutableList<Int> = mutableListOf(),
+    var gridEnabled: Boolean = true,
     var floatingBarX: Int = UNSET_FLOATING_BAR_POSITION,
     var floatingBarY: Int = UNSET_FLOATING_BAR_POSITION
 )
@@ -84,6 +85,12 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
 
     fun setRecentColors(colors: List<Int>) {
         state.recentColors = colors.toMutableList()
+    }
+
+    fun isGridEnabled(): Boolean = state.gridEnabled
+
+    fun setGridEnabled(enabled: Boolean) {
+        state.gridEnabled = enabled
     }
 
     fun getFloatingBarLocation(): Pair<Int, Int>? {

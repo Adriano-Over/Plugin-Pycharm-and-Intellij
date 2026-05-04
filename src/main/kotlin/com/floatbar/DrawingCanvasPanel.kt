@@ -24,8 +24,10 @@ class DrawingCanvasPanel(
     private var editor: Editor? = null
     private var currentFile: VirtualFile? = null
 
+    private val drawingStateService = project.service<FloatBarDrawingStateService>()
+
     private val strokeStore = DrawingStrokeStore(
-        stateService = project.service<FloatBarDrawingStateService>()
+        stateService = drawingStateService
     )
     private val historyStore = DrawingHistoryStore(maxUndoDepth = 50)
 
@@ -38,7 +40,7 @@ class DrawingCanvasPanel(
     private var shapePreview: StrokePath? = null
 
     private var drawColor = Color(255, 0, 0, 210)
-    private var gridEnabled = true
+    private var gridEnabled = drawingStateService.isGridEnabled()
     private val eraseRadius = 9.0
 
     private val canvasPadding = 10
@@ -241,6 +243,7 @@ class DrawingCanvasPanel(
 
     fun toggleGrid() {
         gridEnabled = !gridEnabled
+        drawingStateService.setGridEnabled(gridEnabled)
         repaint()
     }
 
