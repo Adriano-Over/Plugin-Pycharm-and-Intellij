@@ -235,6 +235,7 @@ class DrawingCanvasPanel(
 
     fun canUndo(): Boolean = historyStore.canUndo(editor?.document)
     fun canRedo(): Boolean = historyStore.canRedo(editor?.document)
+    fun hasDrawings(): Boolean = currentStrokes().isNotEmpty()
 
     fun isGridEnabled(): Boolean = gridEnabled
 

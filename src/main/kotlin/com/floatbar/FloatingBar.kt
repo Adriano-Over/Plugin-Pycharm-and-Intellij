@@ -1,5 +1,6 @@
 package com.floatbar
 
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import java.awt.Color
 import java.awt.Dimension
@@ -28,6 +29,8 @@ class FloatingBar(
 
     private var dragX = 0
     private var dragY = 0
+    private val ownerFrame = owner
+    private val stateService = project.service<FloatBarDrawingStateService>()
     private val visibilityListeners = linkedSetOf<(Boolean) -> Unit>()
 
     private val recentColorStore = RecentColorStore(project)
@@ -40,6 +43,7 @@ class FloatingBar(
     private lateinit var fillButton: JButton
     private lateinit var colorButton: JButton
     private lateinit var gridButton: JButton
+    private lateinit var clearButton: JButton
     private lateinit var toolStatusLabel: JLabel
     private lateinit var colorStatusLabel: JLabel
     private val recentColorButtons = mutableListOf<JButton>()
@@ -168,7 +172,7 @@ class FloatingBar(
         }.apply {
             toolTipText = "Redo the last undone drawing action"
         }
-        val clearButton = createButton("Clear") {
+        clearButton = createButton("Clear") {
             confirmAndClearCanvas()
         }.apply {
             toolTipText = "Clear all drawings from the current editor document. You will be asked to confirm first"
@@ -225,12 +229,11 @@ class FloatingBar(
         updateOverlayButtonState(overlayController.isInstalled())
         updateGridButton()
         updateHistoryButtons()
+        updateClearButtonState()
         updateShapeButton()
         updateToolButtonStyles()
         pack()
-
-        val frameBounds = owner.bounds
-        setLocation(frameBounds.x + 24, frameBounds.y + 60)
+        restoreFloatingBarLocation()
 
         val dragHandler = object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
@@ -239,14 +242,39 @@ class FloatingBar(
             }
 
             override fun mouseDragged(e: MouseEvent) {
-                val f = owner.bounds
-                val newX = (x + e.x - dragX).coerceIn(f.x, f.x + f.width - width)
-                val newY = (y + e.y - dragY).coerceIn(f.y, f.y + f.height - height)
+                val f = ownerFrame.bounds
+                val newX = clampCoordinate(x + e.x - dragX, f.x, f.x + f.width - width)
+                val newY = clampCoordinate(y + e.y - dragY, f.y, f.y + f.height - height)
                 setLocation(newX, newY)
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                saveFloatingBarLocation()
             }
         }
         panel.addMouseListener(dragHandler)
         panel.addMouseMotionListener(dragHandler)
+    }
+
+
+    private fun restoreFloatingBarLocation() {
+        val frameBounds = ownerFrame.bounds
+        val savedLocation = stateService.getFloatingBarLocation()
+        val targetX = savedLocation?.first ?: (frameBounds.x + 24)
+        val targetY = savedLocation?.second ?: (frameBounds.y + 60)
+
+        setLocation(
+            clampCoordinate(targetX, frameBounds.x, frameBounds.x + frameBounds.width - width),
+            clampCoordinate(targetY, frameBounds.y, frameBounds.y + frameBounds.height - height)
+        )
+    }
+
+    private fun saveFloatingBarLocation() {
+        stateService.setFloatingBarLocation(x, y)
+    }
+
+    private fun clampCoordinate(value: Int, min: Int, max: Int): Int {
+        return if (max < min) min else value.coerceIn(min, max)
     }
 
     fun addVisibilityListener(listener: (Boolean) -> Unit) {
@@ -318,8 +346,16 @@ class FloatingBar(
 
     private fun showShapesMenu() {
         val menu = JPopupMenu()
+        val selectedShapeKind = canvasPanel.getSelectedShapeKind()
         for (shapeKind in ShapeKind.entries) {
-            menu.add(JMenuItem(shapeKind.displayName).apply {
+            val isSelected = shapeKind == selectedShapeKind
+            val label = if (isSelected) "[selected] ${shapeKind.displayName}" else shapeKind.displayName
+            menu.add(JMenuItem(label).apply {
+                toolTipText = if (isSelected) {
+                    "Currently selected shape: ${shapeKind.displayName}"
+                } else {
+                    "Switch shape tool to ${shapeKind.displayName}"
+                }
                 addActionListener {
                     canvasPanel.setShapeMode(shapeKind)
                     setActiveTool(FloatBarToolMode.SHAPES)
@@ -446,6 +482,27 @@ class FloatingBar(
             enabledTooltip = "Redo the last undone drawing action",
             disabledTooltip = "Nothing to redo yet"
         )
+        updateClearButtonState()
+    }
+
+    private fun updateClearButtonState() {
+        if (!::clearButton.isInitialized) return
+        val hasDrawings = canvasPanel.hasDrawings()
+        clearButton.isEnabled = hasDrawings
+        clearButton.toolTipText = if (hasDrawings) {
+            "Clear all drawings from the current editor document. You will be asked to confirm first"
+        } else {
+            "No drawings to clear in the current editor document"
+        }
+        if (hasDrawings) {
+            clearButton.background = Color(50, 50, 50)
+            clearButton.foreground = Color(220, 220, 220)
+            clearButton.border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+        } else {
+            clearButton.background = Color(38, 38, 38)
+            clearButton.foreground = Color(130, 130, 130)
+            clearButton.border = BorderFactory.createLineBorder(Color(70, 70, 70), 1)
+        }
     }
 
     private fun applyHistoryButtonStyle(
@@ -480,6 +537,7 @@ class FloatingBar(
 
         canvasPanel.clearCanvas()
         updateHistoryButtons()
+        updateClearButtonState()
     }
 
     private fun updateShapeButton() {

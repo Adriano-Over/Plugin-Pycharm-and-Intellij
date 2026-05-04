@@ -5,6 +5,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 
+private const val UNSET_FLOATING_BAR_POSITION = Int.MIN_VALUE
+
 data class SavedPoint(
     var line: Int = 0,
     var column: Int = 0,
@@ -32,7 +34,9 @@ data class SavedFileDrawing(
 
 data class DrawingState(
     var files: MutableList<SavedFileDrawing> = mutableListOf(),
-    var recentColors: MutableList<Int> = mutableListOf()
+    var recentColors: MutableList<Int> = mutableListOf(),
+    var floatingBarX: Int = UNSET_FLOATING_BAR_POSITION,
+    var floatingBarY: Int = UNSET_FLOATING_BAR_POSITION
 )
 
 @Service(Service.Level.PROJECT)
@@ -80,5 +84,20 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
 
     fun setRecentColors(colors: List<Int>) {
         state.recentColors = colors.toMutableList()
+    }
+
+    fun getFloatingBarLocation(): Pair<Int, Int>? {
+        val x = state.floatingBarX
+        val y = state.floatingBarY
+        return if (x == UNSET_FLOATING_BAR_POSITION || y == UNSET_FLOATING_BAR_POSITION) {
+            null
+        } else {
+            x to y
+        }
+    }
+
+    fun setFloatingBarLocation(x: Int, y: Int) {
+        state.floatingBarX = x
+        state.floatingBarY = y
     }
 }
