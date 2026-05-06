@@ -119,7 +119,7 @@ class FloatingBar(
         }
 
         overlayButton = createButton("Overlay OFF") {
-            overlayController.toggle()
+            toggleOverlayPreference()
         }.apply {
             toolTipText = "Show the editor drawing overlay"
         }
@@ -300,7 +300,7 @@ class FloatingBar(
         startedDefaultActivation = true
 
         showBar()
-        overlayController.toggle()
+        applySavedOverlayPreference()
     }
 
     fun showBar() {
@@ -443,13 +443,25 @@ class FloatingBar(
         }
     }
 
+    private fun applySavedOverlayPreference() {
+        overlayController.setEnabled(stateService.isOverlayEnabled())
+        updateOverlayButtonState(overlayController.isInstalled())
+    }
+
+    private fun toggleOverlayPreference() {
+        val shouldEnableOverlay = !overlayController.isInstalled()
+        stateService.setOverlayEnabled(shouldEnableOverlay)
+        overlayController.setEnabled(shouldEnableOverlay)
+        updateOverlayButtonState(overlayController.isInstalled())
+    }
+
     private fun updateOverlayButtonState(installed: Boolean = overlayController.isInstalled()) {
         if (!::overlayButton.isInitialized) return
         overlayButton.text = if (installed) "Overlay ON" else "Overlay OFF"
         overlayButton.toolTipText = if (installed) {
-            "Hide the editor drawing overlay"
+            "Hide the editor drawing overlay. FloatBar will remember this choice"
         } else {
-            "Show the editor drawing overlay"
+            "Show the editor drawing overlay. FloatBar will remember this choice"
         }
         if (installed) {
             overlayButton.background = Color(70, 105, 75)

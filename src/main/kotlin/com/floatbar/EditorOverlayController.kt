@@ -59,10 +59,14 @@ class EditorOverlayController(
     }
 
     fun toggle() {
-        if (overlayInstalled) {
-            uninstallOverlay()
-        } else {
+        setEnabled(!overlayInstalled)
+    }
+
+    fun setEnabled(enabled: Boolean) {
+        if (enabled) {
             bindToSelectedEditor()
+        } else {
+            uninstallOverlay()
         }
     }
 
