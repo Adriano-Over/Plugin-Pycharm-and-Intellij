@@ -34,9 +34,9 @@ class DrawingCanvasPanel(
     private val persistenceDebounceMs = 200
 
     private var currentStroke: StrokePath? = null
-    private var currentTool = FloatBarToolMode.DRAW
+    private var currentTool = drawingStateService.getSelectedToolMode()
     private var toolPreviewPoint: Point? = null
-    private var selectedShapeKind: ShapeKind = ShapeKind.RECTANGLE
+    private var selectedShapeKind: ShapeKind = drawingStateService.getSelectedShapeKind()
     private var shapePreview: StrokePath? = null
 
     private var drawColor = loadPersistedDrawColor()
@@ -197,10 +197,13 @@ class DrawingCanvasPanel(
 
     fun setShapeMode(shapeKind: ShapeKind) {
         selectedShapeKind = shapeKind
+        persistSelectedShapeKind()
         setTool(FloatBarToolMode.SHAPES, clearPreview = false)
     }
 
     fun getSelectedShapeKind(): ShapeKind = selectedShapeKind
+
+    fun getCurrentToolMode(): FloatBarToolMode = currentTool
 
     fun setSelectedColor(color: Color) {
         drawColor = Color(color.red, color.green, color.blue, drawColor.alpha)
@@ -250,6 +253,10 @@ class DrawingCanvasPanel(
         drawingStateService.setSelectedColorRgb(Color(drawColor.red, drawColor.green, drawColor.blue).rgb)
     }
 
+    private fun persistSelectedShapeKind() {
+        drawingStateService.setSelectedShapeKind(selectedShapeKind)
+    }
+
     fun isGridEnabled(): Boolean = gridEnabled
 
     fun toggleGrid() {
@@ -261,6 +268,7 @@ class DrawingCanvasPanel(
     private fun setTool(tool: FloatBarToolMode, clearPreview: Boolean = true) {
         val previousTool = currentTool
         currentTool = tool
+        drawingStateService.setSelectedToolMode(tool)
         if (clearPreview) {
             shapePreview = null
         }

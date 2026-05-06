@@ -230,6 +230,7 @@ class FloatingBar(
         updateGridButton()
         updateHistoryButtons()
         updateClearButtonState()
+        activeTool = canvasPanel.getCurrentToolMode()
         updateShapeButton()
         updateToolButtonStyles()
         pack()
