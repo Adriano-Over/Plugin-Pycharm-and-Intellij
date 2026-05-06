@@ -2,6 +2,7 @@ package com.floatbar
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.WindowManager
 import java.awt.Frame
@@ -14,13 +15,15 @@ class FloatBarService(
 ) : Disposable {
 
     private var bar: FloatingBar? = null
+    private val stateService = project.service<FloatBarDrawingStateService>()
     private val visibilityListeners = linkedMapOf<Int, (Boolean) -> Unit>()
     private var nextListenerId = 0
-    private var visible = false
+    private var visible = stateService.isFloatingBarVisible()
 
     private fun handleVisibilityChanged(isVisible: Boolean) {
         if (visible == isVisible) return
         visible = isVisible
+        stateService.setFloatingBarVisible(isVisible)
         visibilityListeners.values.forEach { it(isVisible) }
     }
 
@@ -32,13 +35,13 @@ class FloatBarService(
             ?: JOptionPane.getRootFrame()
 
         return FloatingBar(owner, project).also { created ->
-            created.addVisibilityListener(::handleVisibilityChanged)
+            bar = created
             if (visible) {
                 created.showBar()
             } else {
                 created.hideBar()
             }
-            bar = created
+            created.addVisibilityListener(::handleVisibilityChanged)
         }
     }
 

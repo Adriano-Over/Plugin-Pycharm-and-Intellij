@@ -299,7 +299,6 @@ class FloatingBar(
         if (startedDefaultActivation) return
         startedDefaultActivation = true
 
-        showBar()
         applySavedOverlayPreference()
     }
 

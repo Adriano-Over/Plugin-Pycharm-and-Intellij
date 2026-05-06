@@ -38,6 +38,7 @@ data class DrawingState(
     var selectedColorRgb: Int = -65536,
     var gridEnabled: Boolean = true,
     var overlayEnabled: Boolean = true,
+    var floatingBarVisible: Boolean = true,
     var selectedToolMode: String = FloatBarToolMode.DRAW.name,
     var selectedShapeKind: String = ShapeKind.RECTANGLE.name,
     var floatingBarX: Int = UNSET_FLOATING_BAR_POSITION,
@@ -107,6 +108,12 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
 
     fun setOverlayEnabled(enabled: Boolean) {
         state.overlayEnabled = enabled
+    }
+
+    fun isFloatingBarVisible(): Boolean = state.floatingBarVisible
+
+    fun setFloatingBarVisible(visible: Boolean) {
+        state.floatingBarVisible = visible
     }
 
     fun getSelectedToolMode(): FloatBarToolMode {
