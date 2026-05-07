@@ -18,6 +18,8 @@ import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
 import javax.swing.event.ChangeListener
 
+private const val RECENT_COLOR_SLOT_COUNT = 6
+
 class ColorPickerDialog(
     owner: Window,
     initialColor: Color,
@@ -72,7 +74,7 @@ class ColorPickerDialog(
             )
         }
 
-        recentPanel.layout = java.awt.GridLayout(1, 5, 4, 4)
+        recentPanel.layout = java.awt.GridLayout(2, 3, 4, 4)
         recentPanel.isOpaque = false
         recentContainer.add(recentPanel, BorderLayout.CENTER)
         refreshRecentButtons()
@@ -146,7 +148,7 @@ class ColorPickerDialog(
     private fun refreshRecentButtons() {
         recentPanel.removeAll()
 
-        repeat(5) { index ->
+        repeat(RECENT_COLOR_SLOT_COUNT) { index ->
             val color = recentColorsSnapshot.getOrNull(index)
             val swatch = JButton().apply {
                 preferredSize = Dimension(24, 24)
@@ -155,6 +157,8 @@ class ColorPickerDialog(
                 background = color ?: Color(0, 0, 0, 0)
                 border = BorderFactory.createLineBorder(Color(180, 180, 180), 1)
                 isEnabled = color != null
+                toolTipText = color?.let { "Recent color ${index + 1}: #${it.red.toString(16).padStart(2, '0').uppercase()}${it.green.toString(16).padStart(2, '0').uppercase()}${it.blue.toString(16).padStart(2, '0').uppercase()}" }
+                    ?: "Empty recent color slot"
                 if (color != null) {
                     addActionListener {
                         selectedColor = color
