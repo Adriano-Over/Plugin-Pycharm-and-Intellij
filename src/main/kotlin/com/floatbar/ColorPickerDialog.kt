@@ -29,20 +29,18 @@ class ColorPickerDialog(
 
     private var selectedColor: Color = initialColor
     private val previewSwatch = JPanel()
+    private val recentPanel = JPanel()
+    private val recentColorButtons = mutableListOf<JButton>()
+    private val recentColorsSnapshot = recentColors.toList()
     private val palettePanel = PalettePanel(initialColor) { color ->
-        selectedColor = color
-        previewSwatch.background = color
+        applySelectedColor(color)
     }
     private val advancedChooser = JColorChooser(initialColor).apply {
         setPreviewPanel(JPanel())
         selectionModel.addChangeListener(ChangeListener {
-            val chosen = this.color
-            selectedColor = chosen
-            previewSwatch.background = chosen
+            applySelectedColor(this.color)
         })
     }
-    private val recentPanel = JPanel()
-    private val recentColorsSnapshot = recentColors.toList()
 
     init {
         layout = BorderLayout(12, 12)
@@ -85,8 +83,7 @@ class ColorPickerDialog(
                 val picker = this@ColorPickerDialog
                 val overlay = EyeDropperOverlay(
                     onPicked = { sampled ->
-                        selectedColor = sampled
-                        previewSwatch.background = sampled
+                        applySelectedColor(sampled)
                         palettePanel.setSelectedColor(sampled)
                         advancedChooser.color = sampled
                     },
@@ -147,6 +144,7 @@ class ColorPickerDialog(
 
     private fun refreshRecentButtons() {
         recentPanel.removeAll()
+        recentColorButtons.clear()
 
         repeat(RECENT_COLOR_SLOT_COUNT) { index ->
             val color = recentColorsSnapshot.getOrNull(index)
@@ -161,17 +159,54 @@ class ColorPickerDialog(
                     ?: "Empty recent color slot"
                 if (color != null) {
                     addActionListener {
-                        selectedColor = color
-                        previewSwatch.background = color
+                        applySelectedColor(color)
                         palettePanel.setSelectedColor(color)
                         advancedChooser.color = color
                     }
                 }
             }
+            recentColorButtons += swatch
             recentPanel.add(swatch)
         }
 
+        updateRecentSelectionBorders()
         recentPanel.revalidate()
         recentPanel.repaint()
+    }
+
+    private fun applySelectedColor(color: Color) {
+        selectedColor = color
+        previewSwatch.background = color
+        updateRecentSelectionBorders()
+    }
+
+    private fun updateRecentSelectionBorders() {
+        recentColorButtons.forEachIndexed { index, button ->
+            val color = recentColorsSnapshot.getOrNull(index)
+            val isSelected = color?.let { hasSameRgb(it, selectedColor) } == true
+
+            button.border = when {
+                isSelected -> BorderFactory.createLineBorder(Color(150, 190, 255), 2)
+                color != null -> BorderFactory.createLineBorder(Color(180, 180, 180), 1)
+                else -> BorderFactory.createLineBorder(Color(75, 75, 75), 1)
+            }
+
+            button.toolTipText = color?.let {
+                val hex = toHexColor(it)
+                if (isSelected) {
+                    "Selected recent color ${index + 1}: $hex"
+                } else {
+                    "Recent color ${index + 1}: $hex"
+                }
+            } ?: "Empty recent color slot"
+        }
+    }
+
+    private fun toHexColor(color: Color): String {
+        return "#%02X%02X%02X".format(color.red, color.green, color.blue)
+    }
+
+    private fun hasSameRgb(left: Color, right: Color): Boolean {
+        return left.red == right.red && left.green == right.green && left.blue == right.blue
     }
 }
