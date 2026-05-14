@@ -3,6 +3,7 @@ package com.floatbar
 import com.intellij.openapi.editor.Editor
 import java.awt.BasicStroke
 import java.awt.Color
+import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
@@ -68,11 +69,22 @@ class DrawingCanvasPainter(
 
             shapePreviewProvider()?.let { preview ->
                 val previewBounds = DrawingViewportTools.computeStrokeLineBounds(preview)
+                val previewGeometry = strokeWorkspace.buildStrokeGeometryContent(preview)
                 if (previewBounds != null &&
+                    previewGeometry != null &&
                     previewBounds.maxLine >= visibleLineRange.first &&
-                    previewBounds.minLine <= visibleLineRange.second
+                    previewBounds.minLine <= visibleLineRange.second &&
+                    previewGeometry.bounds.intersects(contentClip)
                 ) {
-                    paintStroke(gContent, preview, preview = true, visibleContentClip = contentClip)
+                    strokeRenderer.paintStroke(
+                        g = gContent,
+                        stroke = preview,
+                        geometry = previewGeometry,
+                        preview = true,
+                        visibleContentClip = contentClip
+                    )
+                    paintShapePreviewHandles(gContent, preview, previewGeometry, contentClip)
+                    paintShapePreviewBadge(gContent, preview, previewGeometry, contentClip)
                 }
             }
         } finally {
@@ -80,6 +92,111 @@ class DrawingCanvasPainter(
         }
 
         paintToolPreview(g)
+    }
+
+    private fun paintShapePreviewHandles(
+        g: Graphics2D,
+        preview: StrokePath,
+        geometry: StrokeGeometryContent,
+        visibleContentClip: Rectangle
+    ) {
+        val kind = preview.kind ?: return
+        if (kind == ShapeKind.LINE || kind == ShapeKind.ARROW) return
+
+        val bounds = geometry.bounds
+        if (bounds.width <= 0 || bounds.height <= 0 || !bounds.intersects(visibleContentClip)) return
+
+        val handleSize = 7
+        val half = handleSize / 2
+        val points = listOf(
+            Point(bounds.x, bounds.y),
+            Point(bounds.x + bounds.width, bounds.y),
+            Point(bounds.x + bounds.width, bounds.y + bounds.height),
+            Point(bounds.x, bounds.y + bounds.height)
+        )
+
+        val gHandles = g.create() as Graphics2D
+        try {
+            gHandles.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+
+            gHandles.stroke = BasicStroke(1f)
+            for (point in points) {
+                val x = point.x - half
+                val y = point.y - half
+                val dot = Ellipse2D.Double(x.toDouble(), y.toDouble(), handleSize.toDouble(), handleSize.toDouble())
+
+                gHandles.color = Color(25, 25, 25, 170)
+                gHandles.fill(dot)
+                gHandles.color = Color(255, 255, 255, 230)
+                gHandles.draw(dot)
+            }
+        } finally {
+            gHandles.dispose()
+        }
+    }
+
+
+    private fun paintShapePreviewBadge(
+        g: Graphics2D,
+        preview: StrokePath,
+        geometry: StrokeGeometryContent,
+        visibleContentClip: Rectangle
+    ) {
+        val kind = preview.kind ?: return
+        val bounds = geometry.bounds
+        if (bounds.width <= 0 || bounds.height <= 0) return
+
+        val label = buildShapePreviewLabel(kind, bounds)
+        val gBadge = g.create() as Graphics2D
+        try {
+            gBadge.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            gBadge.font = Font("Dialog", Font.BOLD, 11)
+
+            val metrics = gBadge.fontMetrics
+            val horizontalPadding = 8
+            val badgeWidth = metrics.stringWidth(label) + horizontalPadding * 2
+            val badgeHeight = metrics.height + 6
+
+            val minX = visibleContentClip.x + 6
+            val maxX = visibleContentClip.x + visibleContentClip.width - badgeWidth - 6
+            val preferredX = bounds.x
+            val badgeX = clamp(preferredX, minX, maxX.coerceAtLeast(minX))
+
+            val aboveY = bounds.y - badgeHeight - 6
+            val belowY = bounds.y + 8
+            val badgeY = if (aboveY >= visibleContentClip.y + 6) {
+                aboveY
+            } else {
+                belowY.coerceAtMost(visibleContentClip.y + visibleContentClip.height - badgeHeight - 6)
+            }.coerceAtLeast(visibleContentClip.y + 6)
+
+            gBadge.color = Color(25, 25, 25, 220)
+            gBadge.fillRoundRect(badgeX, badgeY, badgeWidth, badgeHeight, 10, 10)
+
+            gBadge.color = Color(150, 190, 255, 210)
+            gBadge.stroke = BasicStroke(1f)
+            gBadge.drawRoundRect(badgeX, badgeY, badgeWidth, badgeHeight, 10, 10)
+
+            gBadge.color = Color(240, 240, 240, 235)
+            gBadge.drawString(label, badgeX + horizontalPadding, badgeY + metrics.ascent + 3)
+        } finally {
+            gBadge.dispose()
+        }
+    }
+
+    private fun buildShapePreviewLabel(kind: ShapeKind, bounds: Rectangle): String {
+        val width = bounds.width.coerceAtLeast(1)
+        val height = bounds.height.coerceAtLeast(1)
+        return when (kind) {
+            ShapeKind.LINE,
+            ShapeKind.ARROW -> "${kind.displayName} - Shift snaps"
+
+            else -> "${kind.displayName} - ${width}x${height}px"
+        }
+    }
+
+    private fun clamp(value: Int, min: Int, max: Int): Int {
+        return if (max < min) min else value.coerceIn(min, max)
     }
 
     private fun paintToolPreview(g: Graphics2D) {

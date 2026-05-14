@@ -32,6 +32,7 @@ class DrawingCanvasController(
     private val ellipseSegments: Int
 ) {
     private val drawStrokeWidth = 3.5f
+    private val shapePreviewDirtyPaddingPx = dirtyPaddingPx + 120
 
     fun clearCanvas() {
         val document = editorProvider()?.document ?: return
@@ -154,7 +155,11 @@ class DrawingCanvasController(
         val oldPreviewPoints = shapePreviewGetter()?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
         shapePreviewSetter(buildShapeStroke(start, safePoint, selectedShapeKindProvider(), isShiftDown))
         val newPreviewPoints = shapePreviewGetter()?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
-        DrawingViewportTools.repaintAround(canvas, oldPreviewPoints + newPreviewPoints + listOf(start, safePoint), dirtyPaddingPx)
+        DrawingViewportTools.repaintAround(
+            canvas = canvas,
+            points = oldPreviewPoints + newPreviewPoints + listOf(start, safePoint),
+            padding = shapePreviewDirtyPaddingPx
+        )
     }
 
     fun handleShapeReleased() {
@@ -167,7 +172,7 @@ class DrawingCanvasController(
             refreshHistoryState()
         }
         shapePreviewSetter(null)
-        DrawingViewportTools.repaintAround(canvas, previewPoints, dirtyPaddingPx)
+        DrawingViewportTools.repaintAround(canvas, previewPoints, shapePreviewDirtyPaddingPx)
     }
 
     fun handleDrawPressed(safePoint: Point) {
