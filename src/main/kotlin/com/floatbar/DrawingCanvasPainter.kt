@@ -66,11 +66,19 @@ class DrawingCanvasPainter(
         gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
 
         try {
+            val renderedCollapsedMarkerKeys = mutableSetOf<CollapsedDrawingMarkerKey>()
+
             for (stroke in currentStrokesProvider()) {
                 val bounds = boundsMap[stroke.id]
                     ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
                 if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
-                    paintStroke(gContent, stroke, preview = false, visibleContentClip = contentClip)
+                    paintStroke(
+                        g = gContent,
+                        stroke = stroke,
+                        preview = false,
+                        visibleContentClip = contentClip,
+                        renderedCollapsedMarkerKeys = renderedCollapsedMarkerKeys
+                    )
                 }
             }
 
@@ -243,10 +251,18 @@ class DrawingCanvasPainter(
         g: Graphics2D,
         stroke: StrokePath,
         preview: Boolean,
-        visibleContentClip: Rectangle?
+        visibleContentClip: Rectangle?,
+        renderedCollapsedMarkerKeys: MutableSet<CollapsedDrawingMarkerKey>? = null
     ) {
         val editor = editorProvider()
-        if (!preview && editor != null && paintFoldAwareStroke(g, editor, stroke, visibleContentClip)) {
+        if (!preview && editor != null && paintFoldAwareStroke(
+                g = g,
+                editor = editor,
+                stroke = stroke,
+                visibleContentClip = visibleContentClip,
+                renderedCollapsedMarkerKeys = renderedCollapsedMarkerKeys
+            )
+        ) {
             return
         }
 
@@ -269,7 +285,8 @@ class DrawingCanvasPainter(
         g: Graphics2D,
         editor: Editor,
         stroke: StrokePath,
-        visibleContentClip: Rectangle?
+        visibleContentClip: Rectangle?,
+        renderedCollapsedMarkerKeys: MutableSet<CollapsedDrawingMarkerKey>?
     ): Boolean {
         if (stroke.points.isEmpty()) return false
 
@@ -325,7 +342,13 @@ class DrawingCanvasPainter(
             }
         }
 
-        paintCollapsedDrawingMarkers(g, editor, hiddenMarkers, visibleContentClip)
+        paintCollapsedDrawingMarkers(
+            g = g,
+            editor = editor,
+            markers = hiddenMarkers,
+            visibleContentClip = visibleContentClip,
+            renderedCollapsedMarkerKeys = renderedCollapsedMarkerKeys
+        )
         return true
     }
 
@@ -345,7 +368,8 @@ class DrawingCanvasPainter(
         g: Graphics2D,
         editor: Editor,
         markers: Set<CollapsedDrawingMarker>,
-        visibleContentClip: Rectangle?
+        visibleContentClip: Rectangle?,
+        renderedCollapsedMarkerKeys: MutableSet<CollapsedDrawingMarkerKey>?
     ) {
         if (markers.isEmpty()) return
 
@@ -355,7 +379,12 @@ class DrawingCanvasPainter(
             gMarker.stroke = BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
 
             for (marker in markers) {
-                paintCollapsedDrawingMarker(gMarker, editor, marker, visibleContentClip)
+                val markerKey = CollapsedDrawingMarkerKey(marker.startOffset, marker.endOffset)
+                if (renderedCollapsedMarkerKeys != null && markerKey in renderedCollapsedMarkerKeys) continue
+
+                if (paintCollapsedDrawingMarker(gMarker, editor, marker, visibleContentClip)) {
+                    renderedCollapsedMarkerKeys?.add(markerKey)
+                }
             }
         } finally {
             gMarker.dispose()
@@ -367,9 +396,9 @@ class DrawingCanvasPainter(
         editor: Editor,
         marker: CollapsedDrawingMarker,
         visibleContentClip: Rectangle?
-    ) {
+    ): Boolean {
         val document = editor.document
-        if (document.lineCount <= 0) return
+        if (document.lineCount <= 0) return false
 
         val safeOffset = marker.startOffset.coerceIn(0, document.textLength)
         val line = document.getLineNumber(safeOffset).coerceIn(0, document.lineCount - 1)
@@ -383,7 +412,7 @@ class DrawingCanvasPainter(
         val centerX = starLeftX + starRadius
         val centerY = lineStart.y + editor.lineHeight / 2
         val bounds = Rectangle(starLeftX, centerY - starRadius, starDiameter, starDiameter)
-        if (visibleContentClip != null && !bounds.intersects(visibleContentClip)) return
+        if (visibleContentClip != null && !bounds.intersects(visibleContentClip)) return false
 
         val star = createStarPolygon(centerX, centerY, outerRadius = starRadius, innerRadius = 3)
         g.color = Color(255, 215, 0, 240)
@@ -391,6 +420,7 @@ class DrawingCanvasPainter(
         g.color = Color(150, 110, 0, 235)
         g.stroke = BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
         g.drawPolygon(star)
+        return true
     }
 
     private fun createStarPolygon(centerX: Int, centerY: Int, outerRadius: Int, innerRadius: Int): Polygon {
@@ -413,5 +443,10 @@ class DrawingCanvasPainter(
         val startOffset: Int,
         val endOffset: Int,
         val colorRgb: Int
+    )
+
+    private data class CollapsedDrawingMarkerKey(
+        val startOffset: Int,
+        val endOffset: Int
     )
 }
