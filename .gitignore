@@ -1,0 +1,27 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IntelliJ IDEA / JetBrains IDE project files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Kotlin / Java build outputs
+*.class
+*.jar
+*.war
+*.ear
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local environment / machine-specific files
+local.properties
+.env
