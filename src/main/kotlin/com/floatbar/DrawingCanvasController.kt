@@ -311,6 +311,10 @@ class DrawingCanvasController(
 
     private fun addAnchorPoint(stroke: StrokePath, point: Point) {
         val anchor = coordinateMapper.viewPointToAnchor(point) ?: return
+        val isFirstPoint = stroke.points.isEmpty()
+        if (isFirstPoint) {
+            coordinateMapper.lockStrokeFoldLayout(stroke, anchor)
+        }
         val last = stroke.points.lastOrNull()
         if (last != null &&
             last.line == anchor.line &&
@@ -337,7 +341,9 @@ class DrawingCanvasController(
             points = converted,
             filled = stroke.filled,
             kind = stroke.kind
-        )
+        ).also { convertedStroke ->
+            coordinateMapper.lockStrokeFoldLayout(convertedStroke)
+        }
     }
 
     private fun buildShapeStroke(start: Point, end: Point, kind: ShapeKind, constrain: Boolean): StrokePath {
@@ -351,6 +357,8 @@ class DrawingCanvasController(
             shapeEdgeSpacing = shapeEdgeSpacing,
             ellipseSegments = ellipseSegments,
             toAnchor = coordinateMapper::viewPointToAnchor
-        )
+        ).also { shapeStroke ->
+            coordinateMapper.lockStrokeFoldLayout(shapeStroke)
+        }
     }
 }

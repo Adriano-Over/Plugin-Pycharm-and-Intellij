@@ -83,7 +83,12 @@ class DrawingStrokeStore(
                             dy = point.dy,
                             offset = point.offset,
                             outsideCode = point.outsideCode,
-                            afterLineEndPx = point.afterLineEndPx
+                            afterLineEndPx = point.afterLineEndPx,
+                            foldHiddenHeightAbove = if (point.anchorStorageVersion >= 3) {
+                                point.foldHiddenHeightAbove
+                            } else {
+                                UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
+                            }
                         )
                     } else {
                         AnchorPoint(
@@ -93,7 +98,8 @@ class DrawingStrokeStore(
                             dy = point.dy,
                             offset = 0,
                             outsideCode = point.outsideCode,
-                            afterLineEndPx = point.afterLineEndPx
+                            afterLineEndPx = point.afterLineEndPx,
+                            foldHiddenHeightAbove = UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
                         )
                     }
                     normalizeAnchor(document, anchor)
@@ -117,7 +123,7 @@ class DrawingStrokeStore(
                 width = stroke.width,
                 points = stroke.points.map { point ->
                     SavedPoint(
-                        anchorStorageVersion = 1,
+                        anchorStorageVersion = 3,
                         line = point.line,
                         column = point.column,
                         dx = point.dx,
@@ -125,6 +131,7 @@ class DrawingStrokeStore(
                         offset = point.offset,
                         outsideCode = point.outsideCode,
                         afterLineEndPx = point.afterLineEndPx,
+                        foldHiddenHeightAbove = point.foldHiddenHeightAbove,
                         x = 0
                     )
                 }.toMutableList(),

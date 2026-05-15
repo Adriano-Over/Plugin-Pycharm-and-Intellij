@@ -16,6 +16,7 @@ data class SavedPoint(
     var offset: Int = 0,
     var outsideCode: Boolean = false,
     var afterLineEndPx: Int = 0,
+    var foldHiddenHeightAbove: Int = UNSET_FOLD_HIDDEN_HEIGHT_ABOVE,
     // Legacy field kept only so older XML can still deserialize.
     var x: Int = 0
 )

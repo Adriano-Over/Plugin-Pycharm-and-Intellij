@@ -329,7 +329,9 @@ class DrawingCanvasPainter(
                     width = stroke.width,
                     points = segment.map { it.copy() }.toMutableList(),
                     filled = false,
-                    kind = null
+                    kind = null,
+                    foldLayoutAnchorLine = stroke.foldLayoutAnchorLine,
+                    foldLayoutAnchorBaseY = stroke.foldLayoutAnchorBaseY
                 )
                 val segmentGeometry = strokeWorkspace.buildStrokeGeometryContent(segmentStroke) ?: continue
                 strokeRenderer.paintStroke(

@@ -14,7 +14,16 @@ import java.util.concurrent.atomic.AtomicLong
  * line/column are cached for persistence/debugging.
  * dx/dy are pixel offsets from the inline anchor base position.
  * afterLineEndPx is used only when outsideCode = true.
+ *
+ * foldLayoutBaseY is intentionally treated as a runtime layout baseline. It lets a new
+ * drawing stay visually stable when unrelated code above it is folded/unfolded during the
+ * same editing session. It is not the drawing's real document anchor; the real anchor is
+ * still line/offset/dx/dy.
  */
+const val UNSET_FOLD_HIDDEN_HEIGHT_ABOVE = Int.MIN_VALUE
+const val UNSET_FOLD_LAYOUT_BASE_Y = Int.MIN_VALUE
+const val UNSET_STROKE_FOLD_LAYOUT_ANCHOR_LINE = Int.MIN_VALUE
+
 data class AnchorPoint(
     var line: Int,
     var column: Int,
@@ -22,7 +31,9 @@ data class AnchorPoint(
     var dy: Int,
     var offset: Int = 0,
     var outsideCode: Boolean = false,
-    var afterLineEndPx: Int = 0
+    var afterLineEndPx: Int = 0,
+    var foldHiddenHeightAbove: Int = UNSET_FOLD_HIDDEN_HEIGHT_ABOVE,
+    var foldLayoutBaseY: Int = UNSET_FOLD_LAYOUT_BASE_Y
 )
 
 private val strokeIdSequence = AtomicLong(1L)
@@ -35,7 +46,14 @@ data class StrokePath(
     val width: Float,
     val points: MutableList<AnchorPoint> = mutableListOf(),
     val filled: Boolean = false,
-    val kind: ShapeKind? = null
+    val kind: ShapeKind? = null,
+    /**
+     * Runtime-only baseline used to keep a whole stroke visually stable when unrelated
+     * folded code above it expands/collapses. This avoids correcting each point by a
+     * different amount and keeps freehand drawings from bending or drifting.
+     */
+    var foldLayoutAnchorLine: Int = UNSET_STROKE_FOLD_LAYOUT_ANCHOR_LINE,
+    var foldLayoutAnchorBaseY: Int = UNSET_FOLD_LAYOUT_BASE_Y
 ) {
     fun deepCopy(): StrokePath = StrokePath(
         id = id,
@@ -43,6 +61,8 @@ data class StrokePath(
         width = width,
         points = points.map { it.copy() }.toMutableList(),
         filled = filled,
-        kind = kind
+        kind = kind,
+        foldLayoutAnchorLine = foldLayoutAnchorLine,
+        foldLayoutAnchorBaseY = foldLayoutAnchorBaseY
     )
 }

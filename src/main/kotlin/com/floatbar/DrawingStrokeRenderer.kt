@@ -218,5 +218,6 @@ class DrawingStrokeRenderer(
 data class StrokeGeometryContent(
     val path: Path2D.Float?,
     val polygon: Polygon?,
-    val bounds: Rectangle
+    val bounds: Rectangle,
+    val foldLayoutSignature: Int = 0
 )

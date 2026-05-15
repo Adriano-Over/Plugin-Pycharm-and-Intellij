@@ -72,16 +72,18 @@ class DrawingStrokeWorkspace(
     }
 
     fun buildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
+        coordinateMapper.ensureStrokeFoldLayoutBaseline(stroke)
         return strokeRenderer.buildStrokeGeometryContent(
             stroke = stroke,
-            toContentPoint = coordinateMapper::toContentPoint
-        )
+            toContentPoint = { anchor -> coordinateMapper.toContentPoint(stroke, anchor) }
+        )?.copy(foldLayoutSignature = coordinateMapper.currentFoldLayoutSignature())
     }
 
     fun getOrBuildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
         val cache = currentStrokeGeometries()
+        val currentFoldLayoutSignature = coordinateMapper.currentFoldLayoutSignature()
         val cached = cache[stroke.id]
-        if (cached != null) return cached
+        if (cached != null && cached.foldLayoutSignature == currentFoldLayoutSignature) return cached
 
         val built = buildStrokeGeometryContent(stroke) ?: return null
         cache[stroke.id] = built

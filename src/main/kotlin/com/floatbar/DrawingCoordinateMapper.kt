@@ -72,6 +72,14 @@ class DrawingCoordinateMapper(
         )
     }
 
+    /**
+     * Convert a document anchor to the editor content coordinate system.
+     *
+     * Important fold rule:
+     * Unrelated folds above the drawing should be handled by IntelliJ's own line mapping.
+     * Do not add an extra fold correction here, because that freezes the drawing on screen
+     * and prevents it from following the code when a block above is collapsed/expanded.
+     */
     fun toContentPoint(anchor: AnchorPoint): Point? {
         val editor = editorProvider() ?: return null
         val document = editor.document
@@ -89,10 +97,62 @@ class DrawingCoordinateMapper(
         )
     }
 
+    /**
+     * Stroke-aware overload kept for renderer/workspace compatibility.
+     * It intentionally delegates to the normal anchor mapping. A whole-stroke fold
+     * correction was tested, but it cancels IntelliJ's line movement and makes drawings
+     * stop following the code when folds above change.
+     */
+    fun toContentPoint(stroke: StrokePath, anchor: AnchorPoint): Point? {
+        return toContentPoint(anchor)
+    }
+
     fun toViewPoint(anchor: AnchorPoint): Point? {
         val editor = editorProvider() ?: return null
         val contentPoint = toContentPoint(anchor) ?: return null
         return SwingUtilities.convertPoint(editor.contentComponent, contentPoint, canvas)
+    }
+
+    fun toViewPoint(stroke: StrokePath, anchor: AnchorPoint): Point? {
+        val editor = editorProvider() ?: return null
+        val contentPoint = toContentPoint(stroke, anchor) ?: return null
+        return SwingUtilities.convertPoint(editor.contentComponent, contentPoint, canvas)
+    }
+
+    /**
+     * Still used to invalidate cached geometry when fold regions change.
+     * We do not use it to compensate coordinates; it only prevents stale cached paths.
+     */
+    fun currentFoldLayoutSignature(): Int {
+        val editor = editorProvider() ?: return 0
+        var result = 17
+        val collapsedRegions = editor.foldingModel.allFoldRegions
+            .asSequence()
+            .filter { !it.isExpanded }
+            .sortedWith(compareBy({ it.startOffset }, { it.endOffset }))
+        for (region in collapsedRegions) {
+            result = 31 * result + region.startOffset
+            result = 31 * result + region.endOffset
+        }
+        return result
+    }
+
+    /**
+     * Compatibility no-op for callers from the previous fold-stability attempt.
+     * Stored anchors remain line/offset based; no screen-freezing baseline is captured.
+     */
+    fun lockStrokeFoldLayout(stroke: StrokePath, anchor: AnchorPoint? = stroke.points.firstOrNull()) {
+        // Intentionally no-op.
+    }
+
+    /** Compatibility no-op. */
+    fun ensureStrokeFoldLayoutBaseline(stroke: StrokePath) {
+        // Intentionally no-op.
+    }
+
+    /** Compatibility no-op. */
+    fun refreshStrokeFoldLayoutBaseline(stroke: StrokePath) {
+        // Intentionally no-op.
     }
 
     fun remapAnchorsForDocumentChange(document: Document, event: DocumentEvent, strokes: List<StrokePath>) {
