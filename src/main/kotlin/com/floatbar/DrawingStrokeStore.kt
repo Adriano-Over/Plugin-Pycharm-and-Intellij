@@ -17,8 +17,17 @@ class DrawingStrokeStore(
     private val strokeGeometryByDocument = WeakHashMap<Document, MutableMap<Long, StrokeGeometryContent>>()
 
     private fun SavedPoint.usesModernAnchorStorage(): Boolean {
+        if (anchorStorageVersion >= 1) return true
+
+        val looksLikeLegacyXAnchor = x != 0 &&
+            dx == 0 &&
+            offset == 0 &&
+            column == 0 &&
+            !outsideCode &&
+            afterLineEndPx == 0
+        if (looksLikeLegacyXAnchor) return false
+
         return offset != 0 ||
-            line != 0 ||
             column != 0 ||
             dx != 0 ||
             dy != 0 ||
@@ -108,6 +117,7 @@ class DrawingStrokeStore(
                 width = stroke.width,
                 points = stroke.points.map { point ->
                     SavedPoint(
+                        anchorStorageVersion = 1,
                         line = point.line,
                         column = point.column,
                         dx = point.dx,

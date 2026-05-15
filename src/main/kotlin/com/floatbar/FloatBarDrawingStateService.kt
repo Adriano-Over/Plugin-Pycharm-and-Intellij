@@ -8,6 +8,7 @@ import com.intellij.openapi.components.Storage
 private const val UNSET_FLOATING_BAR_POSITION = Int.MIN_VALUE
 
 data class SavedPoint(
+    var anchorStorageVersion: Int = 0,
     var line: Int = 0,
     var column: Int = 0,
     var dx: Int = 0,
