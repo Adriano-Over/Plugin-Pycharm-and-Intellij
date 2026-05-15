@@ -16,6 +16,16 @@ class DrawingStrokeStore(
     private val strokeBoundsByDocument = WeakHashMap<Document, MutableMap<Long, StrokeLineBounds>>()
     private val strokeGeometryByDocument = WeakHashMap<Document, MutableMap<Long, StrokeGeometryContent>>()
 
+    private fun SavedPoint.usesModernAnchorStorage(): Boolean {
+        return offset != 0 ||
+            line != 0 ||
+            column != 0 ||
+            dx != 0 ||
+            dy != 0 ||
+            outsideCode ||
+            afterLineEndPx != 0
+    }
+
     fun currentStrokes(document: Document?): MutableList<StrokePath> {
         if (document == null) return mutableListOf()
         return strokesByDocument.getOrPut(document) { mutableListOf() }
@@ -55,8 +65,8 @@ class DrawingStrokeStore(
                 color = Color(saved.color, true),
                 width = saved.width,
                 points = saved.points.map { point ->
-                    val hasOffset = point.offset > 0 || point.line > 0 || point.column > 0
-                    val anchor = if (hasOffset) {
+                    val modernAnchor = point.usesModernAnchorStorage()
+                    val anchor = if (modernAnchor) {
                         AnchorPoint(
                             line = point.line,
                             column = point.column,

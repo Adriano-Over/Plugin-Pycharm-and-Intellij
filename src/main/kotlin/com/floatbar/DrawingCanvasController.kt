@@ -6,6 +6,7 @@ import java.awt.Point
 import java.awt.Rectangle
 import javax.swing.JPanel
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 class DrawingCanvasController(
@@ -33,6 +34,7 @@ class DrawingCanvasController(
 ) {
     private val drawStrokeWidth = 3.5f
     private val shapePreviewDirtyPaddingPx = dirtyPaddingPx + 120
+    private val minShapeCommitSizePx = 8
 
     fun clearCanvas() {
         val document = editorProvider()?.document ?: return
@@ -147,7 +149,6 @@ class DrawingCanvasController(
     }
 
     fun handleShapePressed() {
-        saveStateForUndo()
         shapePreviewSetter(null)
     }
 
@@ -165,7 +166,8 @@ class DrawingCanvasController(
     fun handleShapeReleased() {
         val preview = shapePreviewGetter()
         val previewPoints = preview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
-        if (preview != null && preview.points.size >= 2) {
+        if (preview != null && shouldCommitShapePreview(preview, previewPoints)) {
+            saveStateForUndo()
             val committed = preview.deepCopy()
             strokeWorkspace.addStroke(committed)
             documentSync.schedulePersistCurrentStrokes()
@@ -173,6 +175,33 @@ class DrawingCanvasController(
         }
         shapePreviewSetter(null)
         DrawingViewportTools.repaintAround(canvas, previewPoints, shapePreviewDirtyPaddingPx)
+    }
+
+
+    private fun shouldCommitShapePreview(preview: StrokePath, previewPoints: List<Point>): Boolean {
+        if (preview.points.size < 2 || previewPoints.size < 2) return false
+
+        val kind = preview.kind
+        if (kind == ShapeKind.LINE || kind == ShapeKind.ARROW) {
+            val start = previewPoints.first()
+            val end = previewPoints.last()
+            return hypot((end.x - start.x).toDouble(), (end.y - start.y).toDouble()) >= minShapeCommitSizePx
+        }
+
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+        for (point in previewPoints) {
+            minX = minOf(minX, point.x)
+            minY = minOf(minY, point.y)
+            maxX = maxOf(maxX, point.x)
+            maxY = maxOf(maxY, point.y)
+        }
+
+        val width = maxX - minX
+        val height = maxY - minY
+        return width >= minShapeCommitSizePx || height >= minShapeCommitSizePx
     }
 
     fun handleDrawPressed(safePoint: Point) {
