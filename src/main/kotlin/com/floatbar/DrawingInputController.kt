@@ -3,6 +3,8 @@ package com.floatbar
 import java.awt.Point
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.MouseWheelEvent
+import javax.swing.SwingUtilities
 
 class DrawingInputController(
     private val currentToolProvider: () -> FloatBarToolMode,
@@ -17,13 +19,20 @@ class DrawingInputController(
     private val onShapeReleased: () -> Unit,
     private val onDrawPressed: (Point) -> Unit,
     private val onDrawDragged: (Point?, Point) -> Unit,
-    private val onDrawReleased: () -> Unit
+    private val onDrawReleased: () -> Unit,
+    private val onMouseWheel: (MouseWheelEvent) -> Unit,
+    private val onPassthroughMouseEvent: (MouseEvent) -> Unit
 ) : MouseAdapter() {
 
     private var shapeStartPoint: Point? = null
     private var lastDragPoint: Point? = null
 
     override fun mousePressed(e: MouseEvent) {
+        if (!SwingUtilities.isLeftMouseButton(e)) {
+            onPassthroughMouseEvent(e)
+            return
+        }
+
         val safePoint = clampPoint(e.point) ?: run {
             onToolPreviewPointChanged(null)
             return
@@ -55,6 +64,11 @@ class DrawingInputController(
     }
 
     override fun mouseDragged(e: MouseEvent) {
+        if ((e.modifiersEx and MouseEvent.BUTTON1_DOWN_MASK) == 0) {
+            onPassthroughMouseEvent(e)
+            return
+        }
+
         val safePoint = clampPoint(e.point) ?: run {
             onToolPreviewPointChanged(null)
             return
@@ -83,6 +97,11 @@ class DrawingInputController(
     }
 
     override fun mouseReleased(e: MouseEvent) {
+        if (!SwingUtilities.isLeftMouseButton(e)) {
+            onPassthroughMouseEvent(e)
+            return
+        }
+
         onToolPreviewPointChanged(clampPoint(e.point))
 
         when (currentToolProvider()) {
@@ -110,6 +129,16 @@ class DrawingInputController(
 
     override fun mouseMoved(e: MouseEvent) {
         onToolPreviewPointChanged(clampPoint(e.point))
+    }
+
+    override fun mouseClicked(e: MouseEvent) {
+        if (!SwingUtilities.isLeftMouseButton(e)) {
+            onPassthroughMouseEvent(e)
+        }
+    }
+
+    override fun mouseWheelMoved(e: MouseWheelEvent) {
+        onMouseWheel(e)
     }
 
     override fun mouseExited(e: MouseEvent) {

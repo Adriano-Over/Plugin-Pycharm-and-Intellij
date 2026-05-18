@@ -10,9 +10,12 @@ import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Point
+import java.awt.event.MouseEvent
+import java.awt.event.MouseWheelEvent
 import kotlin.math.roundToInt
 import javax.swing.JDialog
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 
 class DrawingCanvasPanel(
     private val project: Project,
@@ -149,11 +152,58 @@ class DrawingCanvasPanel(
             onShapeReleased = canvasController::handleShapeReleased,
             onDrawPressed = canvasController::handleDrawPressed,
             onDrawDragged = canvasController::handleDrawDragged,
-            onDrawReleased = canvasController::handleDrawReleased
+            onDrawReleased = canvasController::handleDrawReleased,
+            onMouseWheel = ::forwardMouseWheelToEditor,
+            onPassthroughMouseEvent = ::forwardMouseEventToEditor
         )
 
         addMouseListener(inputController)
         addMouseMotionListener(inputController)
+        addMouseWheelListener(inputController)
+    }
+
+
+    private fun forwardMouseWheelToEditor(event: MouseWheelEvent) {
+        val target = editor?.contentComponent ?: return
+        val targetPoint = SwingUtilities.convertPoint(this, event.point, target)
+        val forwardedEvent = MouseWheelEvent(
+            target,
+            event.id,
+            event.`when`,
+            event.modifiersEx,
+            targetPoint.x,
+            targetPoint.y,
+            event.xOnScreen,
+            event.yOnScreen,
+            event.clickCount,
+            event.isPopupTrigger,
+            event.scrollType,
+            event.scrollAmount,
+            event.wheelRotation,
+            event.preciseWheelRotation
+        )
+        target.dispatchEvent(forwardedEvent)
+        event.consume()
+    }
+
+    private fun forwardMouseEventToEditor(event: MouseEvent) {
+        val target = editor?.contentComponent ?: return
+        val targetPoint = SwingUtilities.convertPoint(this, event.point, target)
+        val forwardedEvent = MouseEvent(
+            target,
+            event.id,
+            event.`when`,
+            event.modifiersEx,
+            targetPoint.x,
+            targetPoint.y,
+            event.xOnScreen,
+            event.yOnScreen,
+            event.clickCount,
+            event.isPopupTrigger,
+            event.button
+        )
+        target.dispatchEvent(forwardedEvent)
+        event.consume()
     }
 
     fun bindEditor(editor: Editor) {

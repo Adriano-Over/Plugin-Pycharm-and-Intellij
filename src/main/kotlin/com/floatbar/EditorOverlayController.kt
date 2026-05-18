@@ -189,7 +189,7 @@ class EditorOverlayController(
 
         val visibleArea = editor.scrollingModel.visibleArea
         val editorOnLayered = SwingUtilities.convertRectangle(editorComponent, visibleArea, layeredPane)
-        val inset = 20
+        val inset = 0
         val bounded = Rectangle(
             editorOnLayered.x + inset,
             editorOnLayered.y + inset,
