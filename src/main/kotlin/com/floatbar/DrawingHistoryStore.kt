@@ -38,6 +38,14 @@ class DrawingHistoryStore(
         return snapshot(redo.removeAt(redo.lastIndex))
     }
 
+    fun discardLastUndo(document: Document?) {
+        if (document == null) return
+        val undo = undoByDocument[document] ?: return
+        if (undo.isNotEmpty()) {
+            undo.removeAt(undo.lastIndex)
+        }
+    }
+
     fun canUndo(document: Document?): Boolean {
         if (document == null) return false
         return undoByDocument[document]?.isNotEmpty() == true

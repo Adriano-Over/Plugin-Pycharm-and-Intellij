@@ -36,6 +36,7 @@ class DrawingCanvasController(
     private val drawStrokeWidth = 3.5f
     private val shapePreviewDirtyPaddingPx = dirtyPaddingPx + 120
     private val minShapeCommitSizePx = 8
+    private val minFreehandCommitLengthPx = 6.0
 
     fun clearCanvas() {
         val document = editorProvider()?.document ?: return
@@ -239,15 +240,65 @@ class DrawingCanvasController(
     }
 
     fun handleDrawReleased() {
-        currentStrokeGetter()?.let { stroke ->
-            if (strokePathTools.simplifyFreehandStrokeInPlace(stroke)) {
-                strokeWorkspace.updateStrokeBounds(stroke)
-                strokeWorkspace.invalidateStrokeGeometry(stroke)
-            }
+        val stroke = currentStrokeGetter()
+        if (stroke == null) {
+            currentStrokeSetter(null)
+            refreshHistoryState()
+            return
         }
+
+        val originalPoints = stroke.points.mapNotNull(coordinateMapper::toViewPoint)
+        if (!shouldCommitFreehandStroke(stroke, originalPoints)) {
+            removeUncommittedFreehandStroke(stroke, originalPoints)
+            currentStrokeSetter(null)
+            refreshHistoryState()
+            return
+        }
+
+        if (strokePathTools.simplifyFreehandStrokeInPlace(stroke)) {
+            strokeWorkspace.updateStrokeBounds(stroke)
+            strokeWorkspace.invalidateStrokeGeometry(stroke)
+        }
+
+        val simplifiedPoints = stroke.points.mapNotNull(coordinateMapper::toViewPoint)
+        if (!shouldCommitFreehandStroke(stroke, simplifiedPoints)) {
+            removeUncommittedFreehandStroke(stroke, originalPoints + simplifiedPoints)
+            currentStrokeSetter(null)
+            refreshHistoryState()
+            return
+        }
+
         currentStrokeSetter(null)
         documentSync.schedulePersistCurrentStrokes()
         refreshHistoryState()
+    }
+
+    private fun shouldCommitFreehandStroke(stroke: StrokePath, viewPoints: List<Point>): Boolean {
+        if (stroke.points.size < 2 || viewPoints.size < 2) return false
+
+        var pathLength = 0.0
+        var previous = viewPoints.first()
+        for (index in 1 until viewPoints.size) {
+            val current = viewPoints[index]
+            pathLength += previous.distance(current)
+            if (pathLength >= minFreehandCommitLengthPx) {
+                return true
+            }
+            previous = current
+        }
+
+        return false
+    }
+
+    private fun removeUncommittedFreehandStroke(stroke: StrokePath, viewPoints: List<Point>) {
+        val document = editorProvider()?.document
+        currentStrokesProvider().remove(stroke)
+        strokeWorkspace.currentStrokeBounds().remove(stroke.id)
+        strokeWorkspace.currentStrokeGeometries().remove(stroke.id)
+        historyStore.discardLastUndo(document)
+        if (viewPoints.isNotEmpty()) {
+            DrawingViewportTools.repaintAround(canvas, viewPoints, dirtyPaddingPx)
+        }
     }
 
     private fun saveStateForUndo() {

@@ -3,6 +3,7 @@ package com.floatbar
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import java.awt.Color
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.Font
 import java.awt.Frame
@@ -26,6 +27,15 @@ class FloatingBar(
     owner: Frame,
     project: Project
 ) : JDialog(owner, false) {
+
+    private companion object {
+        private const val BAR_WIDTH = 104
+        private const val BUTTON_HEIGHT = 28
+        private const val HALF_BUTTON_WIDTH = 49
+        private const val STATUS_HEIGHT = 24
+        private const val COLOR_STATUS_HEIGHT = 20
+        private const val HEADER_BUTTON_SIZE = 20
+    }
 
     private var dragX = 0
     private var dragY = 0
@@ -83,11 +93,11 @@ class FloatingBar(
         val buttonColumn = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
-            border = BorderFactory.createEmptyBorder(6, 6, 6, 6)
+            border = BorderFactory.createEmptyBorder(6, 8, 6, 8)
         }
         toolStatusLabel = JLabel("Tool: Draw", SwingConstants.CENTER).apply {
-            preferredSize = Dimension(88, 24)
-            maximumSize = Dimension(88, 24)
+            preferredSize = Dimension(BAR_WIDTH, STATUS_HEIGHT)
+            maximumSize = Dimension(BAR_WIDTH, STATUS_HEIGHT)
             alignmentX = CENTER_ALIGNMENT
             font = Font("Dialog", Font.BOLD, 11)
             isOpaque = true
@@ -97,8 +107,8 @@ class FloatingBar(
             toolTipText = "Current FloatBar tool"
         }
         colorStatusLabel = JLabel("Color: #000000", SwingConstants.CENTER).apply {
-            preferredSize = Dimension(88, 20)
-            maximumSize = Dimension(88, 20)
+            preferredSize = Dimension(BAR_WIDTH, COLOR_STATUS_HEIGHT)
+            maximumSize = Dimension(BAR_WIDTH, COLOR_STATUS_HEIGHT)
             alignmentX = CENTER_ALIGNMENT
             font = Font("Dialog", Font.PLAIN, 10)
             isOpaque = true
@@ -110,13 +120,14 @@ class FloatingBar(
         val historyRow = JPanel(GridLayout(1, 2, 6, 0)).apply {
             isOpaque = false
             alignmentX = CENTER_ALIGNMENT
-            maximumSize = Dimension(88, 28)
-            preferredSize = Dimension(88, 28)
+            maximumSize = Dimension(BAR_WIDTH, BUTTON_HEIGHT)
+            preferredSize = Dimension(BAR_WIDTH, BUTTON_HEIGHT)
         }
-        val recentGrid = JPanel(GridLayout(0, 2, 6, 6)).apply {
+        val recentGrid = JPanel(GridLayout(0, 3, 6, 6)).apply {
             isOpaque = false
-            border = BorderFactory.createEmptyBorder(0, 6, 6, 6)
+            border = BorderFactory.createEmptyBorder(0, 8, 8, 8)
         }
+        val headerPanel = createHeaderPanel()
 
         overlayButton = createButton("Overlay OFF") {
             toggleOverlayPreference()
@@ -181,14 +192,24 @@ class FloatingBar(
         buttonColumn.add(toolStatusLabel)
         buttonColumn.add(Box.createVerticalStrut(4))
         buttonColumn.add(colorStatusLabel)
-        buttonColumn.add(Box.createVerticalStrut(6))
-
-        listOf(overlayButton, drawingButton, erasingButton, colorButton, fillButton, shapeButton, gridButton).forEach { button ->
-            button.alignmentX = CENTER_ALIGNMENT
-            buttonColumn.add(button)
-            buttonColumn.add(Box.createVerticalStrut(6))
+        buttonColumn.add(createSectionSeparator())
+        buttonColumn.add(createSectionLabel("Tools"))
+        listOf(drawingButton, erasingButton, fillButton, shapeButton).forEach { button ->
+            addStackedButton(buttonColumn, button)
         }
 
+        buttonColumn.add(createSectionSeparator())
+        buttonColumn.add(createSectionLabel("Color"))
+        addStackedButton(buttonColumn, colorButton)
+
+        buttonColumn.add(createSectionSeparator())
+        buttonColumn.add(createSectionLabel("View"))
+        listOf(overlayButton, gridButton).forEach { button ->
+            addStackedButton(buttonColumn, button)
+        }
+
+        buttonColumn.add(createSectionSeparator())
+        buttonColumn.add(createSectionLabel("History"))
         historyRow.add(undoButton)
         historyRow.add(redoButton)
         buttonColumn.add(historyRow)
@@ -207,6 +228,7 @@ class FloatingBar(
                 margin = Insets(0, 0, 0, 0)
                 border = BorderFactory.createLineBorder(Color(110, 110, 110), 1)
                 toolTipText = "Recent color ${index + 1}"
+                installHoverFeedback(this)
                 addActionListener {
                     val color = recentColorStore.snapshot().getOrNull(index) ?: return@addActionListener
                     canvasPanel.setSelectedColor(color)
@@ -220,6 +242,7 @@ class FloatingBar(
             recentGrid.add(swatch)
         }
 
+        panel.add(headerPanel)
         panel.add(buttonColumn)
         panel.add(recentGrid)
         contentPane.add(panel)
@@ -255,8 +278,80 @@ class FloatingBar(
         }
         panel.addMouseListener(dragHandler)
         panel.addMouseMotionListener(dragHandler)
+        headerPanel.addMouseListener(dragHandler)
+        headerPanel.addMouseMotionListener(dragHandler)
     }
 
+    private fun createHeaderPanel(): JPanel {
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            background = Color(38, 38, 38)
+            border = BorderFactory.createEmptyBorder(5, 8, 5, 8)
+            maximumSize = Dimension(Int.MAX_VALUE, 30)
+            isOpaque = true
+            toolTipText = "Drag to move FloatBar"
+
+            add(JLabel("FloatBar").apply {
+                font = Font("Dialog", Font.BOLD, 12)
+                foreground = Color(235, 235, 235)
+                toolTipText = "Drag to move FloatBar"
+            })
+            add(Box.createHorizontalGlue())
+            add(JLabel("::").apply {
+                font = Font("Dialog", Font.BOLD, 12)
+                foreground = Color(150, 150, 150)
+                toolTipText = "Drag to move FloatBar"
+            })
+            add(Box.createHorizontalStrut(6))
+            add(createHeaderHideButton())
+        }
+    }
+
+    private fun createHeaderHideButton(): JButton {
+        return JButton("×").apply {
+            preferredSize = Dimension(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
+            minimumSize = Dimension(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
+            maximumSize = Dimension(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE)
+            margin = Insets(0, 0, 1, 0)
+            font = Font("Dialog", Font.BOLD, 12)
+            isFocusPainted = false
+            isBorderPainted = true
+            isOpaque = true
+            background = Color(52, 52, 52)
+            foreground = Color(220, 220, 220)
+            border = BorderFactory.createLineBorder(Color(95, 95, 95), 1)
+            toolTipText = "Hide FloatBar. Use the status bar widget or action to show it again"
+            installHoverFeedback(this)
+            addActionListener { hideBar() }
+        }
+    }
+
+    private fun createSectionLabel(text: String): JLabel {
+        return JLabel(text.uppercase(), SwingConstants.LEFT).apply {
+            preferredSize = Dimension(BAR_WIDTH, 16)
+            maximumSize = Dimension(BAR_WIDTH, 16)
+            alignmentX = CENTER_ALIGNMENT
+            font = Font("Dialog", Font.BOLD, 9)
+            foreground = Color(165, 165, 165)
+            toolTipText = "$text controls"
+        }
+    }
+
+    private fun createSectionSeparator(): JPanel {
+        return JPanel().apply {
+            maximumSize = Dimension(BAR_WIDTH, 8)
+            preferredSize = Dimension(BAR_WIDTH, 8)
+            minimumSize = Dimension(BAR_WIDTH, 8)
+            isOpaque = false
+            border = BorderFactory.createMatteBorder(1, 0, 0, 0, Color(65, 65, 65))
+        }
+    }
+
+    private fun addStackedButton(container: JPanel, button: JButton) {
+        button.alignmentX = CENTER_ALIGNMENT
+        container.add(button)
+        container.add(Box.createVerticalStrut(6))
+    }
 
     private fun restoreFloatingBarLocation() {
         val frameBounds = ownerFrame.bounds
@@ -287,6 +382,7 @@ class FloatingBar(
         val changed = isVisible != visible
         super.setVisible(visible)
         if (changed) {
+            stateService.setFloatingBarVisible(visible)
             visibilityListeners.forEach { it(visible) }
         }
     }
@@ -317,31 +413,60 @@ class FloatingBar(
 
     private fun createButton(text: String, onClick: () -> Unit): JButton {
         return JButton(text).apply {
-            preferredSize = Dimension(88, 28)
-            maximumSize = Dimension(88, 28)
+            preferredSize = Dimension(BAR_WIDTH, BUTTON_HEIGHT)
+            maximumSize = Dimension(BAR_WIDTH, BUTTON_HEIGHT)
             font = Font("Dialog", Font.PLAIN, 12)
             isFocusPainted = false
             isOpaque = true
             background = Color(50, 50, 50)
             foreground = Color(220, 220, 220)
             border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+            installHoverFeedback(this)
             addActionListener { onClick() }
         }
     }
 
     private fun createHalfButton(text: String, onClick: () -> Unit): JButton {
         return JButton(text).apply {
-            preferredSize = Dimension(41, 28)
-            minimumSize = Dimension(41, 28)
-            maximumSize = Dimension(41, 28)
+            preferredSize = Dimension(HALF_BUTTON_WIDTH, BUTTON_HEIGHT)
+            minimumSize = Dimension(HALF_BUTTON_WIDTH, BUTTON_HEIGHT)
+            maximumSize = Dimension(HALF_BUTTON_WIDTH, BUTTON_HEIGHT)
             font = Font("Dialog", Font.PLAIN, 11)
             isFocusPainted = false
             isOpaque = true
             background = Color(50, 50, 50)
             foreground = Color(220, 220, 220)
             border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+            installHoverFeedback(this)
             addActionListener { onClick() }
         }
+    }
+
+    private fun installHoverFeedback(button: JButton) {
+        button.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        button.addMouseListener(object : MouseAdapter() {
+            override fun mouseEntered(e: MouseEvent) {
+                if (!button.isEnabled) return
+                button.border = BorderFactory.createLineBorder(Color(190, 190, 190), 1)
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                restoreToolbarStyles()
+            }
+        })
+    }
+
+    private fun restoreToolbarStyles() {
+        if (::colorButton.isInitialized) updateColorButton()
+        if (::overlayButton.isInitialized) updateOverlayButtonState(overlayController.isInstalled())
+        if (::gridButton.isInitialized) updateGridButton()
+        if (::undoButton.isInitialized && ::redoButton.isInitialized) updateHistoryButtons()
+        if (::clearButton.isInitialized) updateClearButtonState()
+        if (::drawingButton.isInitialized && ::erasingButton.isInitialized && ::fillButton.isInitialized && ::shapeButton.isInitialized) {
+            updateToolButtonStyles()
+            updateShapeButton()
+        }
+        if (recentColorButtons.isNotEmpty()) refreshRecentColorButtons()
     }
 
     private fun showShapesMenu() {
@@ -582,7 +707,20 @@ class FloatingBar(
             FloatBarToolMode.SHAPES -> "Tool: ${canvasPanel.getSelectedShapeKind().displayName}"
         }
         toolStatusLabel.text = toolText
-        toolStatusLabel.toolTipText = toolText
+        toolStatusLabel.toolTipText = "$toolText is active"
+        applyToolStatusLabelStyle()
+    }
+
+    private fun applyToolStatusLabelStyle() {
+        val (backgroundColor, borderColor) = when (activeTool) {
+            FloatBarToolMode.DRAW -> Color(58, 82, 135) to Color(140, 175, 255)
+            FloatBarToolMode.ERASE -> Color(112, 78, 50) to Color(230, 170, 100)
+            FloatBarToolMode.FILL -> Color(65, 105, 80) to Color(130, 205, 145)
+            FloatBarToolMode.SHAPES -> Color(92, 70, 125) to Color(190, 155, 245)
+        }
+        toolStatusLabel.background = backgroundColor
+        toolStatusLabel.foreground = Color.WHITE
+        toolStatusLabel.border = BorderFactory.createLineBorder(borderColor, 1)
     }
 
     private fun applyToolButtonStyle(button: JButton, active: Boolean) {
