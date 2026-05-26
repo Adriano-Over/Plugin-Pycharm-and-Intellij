@@ -8,12 +8,17 @@ import java.awt.Point
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
 import kotlin.math.max
+import kotlin.math.min
 
 class DrawingCoordinateMapper(
     private val canvas: JPanel,
     private val editorProvider: () -> Editor?,
     private val minCodeClearancePx: Int
 ) {
+    private val straightWrapLineWindow = 18
+    private val straightWrapActivationMarginPx = 24
+    private var activeFreehandStraightWrapX: Int? = null
+
     data class LineInfo(
         val line: Int,
         val lineEndColumn: Int,
@@ -50,11 +55,67 @@ class DrawingCoordinateMapper(
         val editor = editorProvider() ?: return null
         val editorPoint = SwingUtilities.convertPoint(canvas, point, editor.contentComponent)
         val lineInfo = resolveLineInfo(editorPoint) ?: return null
+        val lineRequiredX = lineInfo.lineEndX + minCodeClearancePx
+        val straightWrapX = activeFreehandStraightWrapX
+        val requiredX = if (straightWrapX != null) {
+            max(straightWrapX, lineRequiredX)
+        } else {
+            lineRequiredX
+        }
         val clampedEditorPoint = Point(
-            max(editorPoint.x, lineInfo.lineEndX + minCodeClearancePx),
+            max(editorPoint.x, requiredX),
             editorPoint.y
         )
         return SwingUtilities.convertPoint(editor.contentComponent, clampedEditorPoint, canvas)
+    }
+
+    /**
+     * Freehand drawings that start over/near code are pushed to the right side of the code.
+     * Without a stroke-level straight edge, the clamp follows each individual line end and
+     * a vertical wrapper stroke can curve around short/long code lines. While one freehand
+     * stroke is being drawn, lock that clearance to a local max code edge so the wrapper
+     * stays straighter.
+     */
+    fun beginFreehandStraightWrap(point: Point) {
+        val editor = editorProvider() ?: run {
+            activeFreehandStraightWrapX = null
+            return
+        }
+        val editorPoint = SwingUtilities.convertPoint(canvas, point, editor.contentComponent)
+        val lineInfo = resolveLineInfo(editorPoint) ?: run {
+            activeFreehandStraightWrapX = null
+            return
+        }
+
+        val lineRequiredX = lineInfo.lineEndX + minCodeClearancePx
+        activeFreehandStraightWrapX = if (editorPoint.x <= lineRequiredX + straightWrapActivationMarginPx) {
+            computeLocalMaxLineEndX(editor, lineInfo.line, straightWrapLineWindow) + minCodeClearancePx
+        } else {
+            null
+        }
+    }
+
+    fun endFreehandStraightWrap() {
+        activeFreehandStraightWrapX = null
+    }
+
+    private fun computeLocalMaxLineEndX(editor: Editor, centerLine: Int, radius: Int): Int {
+        val document = editor.document
+        if (document.lineCount <= 0) return 0
+
+        val firstLine = max(0, centerLine - radius)
+        val lastLine = min(document.lineCount - 1, centerLine + radius)
+        var maxLineEndX = 0
+
+        for (line in firstLine..lastLine) {
+            val lineEndOffset = document.getLineEndOffset(line)
+            val lineEndLogical = editor.offsetToLogicalPosition(lineEndOffset)
+            val lineBase = editor.logicalPositionToXY(LogicalPosition(line, 0))
+            val lineEndPoint = editor.logicalPositionToXY(lineEndLogical)
+            maxLineEndX = max(maxLineEndX, max(lineBase.x, lineEndPoint.x))
+        }
+
+        return maxLineEndX
     }
 
     fun viewPointToAnchor(point: Point): AnchorPoint? {

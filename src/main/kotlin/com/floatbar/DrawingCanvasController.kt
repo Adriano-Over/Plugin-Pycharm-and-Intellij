@@ -28,6 +28,7 @@ class DrawingCanvasController(
     private val canvasPadding: Int,
     private val dirtyPaddingPx: Int,
     private val eraseRadius: Double,
+    private val freehandMinPointDistancePx: Double,
     private val eraseMinMovePx: Double,
     private val shapeEdgeSpacing: Double,
     private val ellipseSegments: Int
@@ -209,21 +210,31 @@ class DrawingCanvasController(
         val stroke = StrokePath(color = drawColorProvider(), width = drawStrokeWidth)
         currentStrokeSetter(stroke)
         strokeWorkspace.addStroke(stroke)
-        addAnchorPoint(stroke, safePoint)
-        DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx)
+        if (addAnchorPoint(stroke, safePoint)) {
+            strokeWorkspace.invalidateStrokeGeometry(stroke)
+            DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx)
+        }
     }
 
     fun handleDrawDragged(previous: Point?, safePoint: Point) {
         val stroke = currentStrokeGetter() ?: return
         if (previous == null) {
-            addAnchorPoint(stroke, safePoint)
-            DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx)
+            if (addAnchorPoint(stroke, safePoint)) {
+                strokeWorkspace.invalidateStrokeGeometry(stroke)
+                DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx)
+            }
         } else {
             val samples = strokePathTools.buildDrawSamples(previous, safePoint)
+            val acceptedPoints = mutableListOf<Point>()
             for (p in samples) {
-                addAnchorPoint(stroke, p)
+                if (addAnchorPoint(stroke, p)) {
+                    acceptedPoints += p
+                }
             }
-            DrawingViewportTools.repaintAround(canvas, samples + listOf(previous, safePoint), dirtyPaddingPx)
+            if (acceptedPoints.isNotEmpty()) {
+                strokeWorkspace.invalidateStrokeGeometry(stroke)
+                DrawingViewportTools.repaintAround(canvas, acceptedPoints + listOf(previous, safePoint), dirtyPaddingPx)
+            }
         }
     }
 
@@ -309,24 +320,33 @@ class DrawingCanvasController(
         strokeWorkspace.setStrokes(document, merged)
     }
 
-    private fun addAnchorPoint(stroke: StrokePath, point: Point) {
-        val anchor = coordinateMapper.viewPointToAnchor(point) ?: return
+    private fun addAnchorPoint(stroke: StrokePath, point: Point): Boolean {
+        val anchor = coordinateMapper.viewPointToAnchor(point) ?: return false
         val isFirstPoint = stroke.points.isEmpty()
         if (isFirstPoint) {
             coordinateMapper.lockStrokeFoldLayout(stroke, anchor)
         }
-        val last = stroke.points.lastOrNull()
-        if (last != null &&
-            last.line == anchor.line &&
-            last.column == anchor.column &&
-            abs(last.dx - anchor.dx) < 2 &&
-            abs(last.dy - anchor.dy) < 2
-        ) {
-            return
+
+        if (!shouldKeepFreehandPoint(stroke, anchor, point)) {
+            return false
         }
+
         stroke.points += anchor
         strokeWorkspace.expandStrokeBoundsWithAnchor(stroke, anchor)
-        strokeWorkspace.invalidateStrokeGeometry(stroke)
+        return true
+    }
+
+    private fun shouldKeepFreehandPoint(stroke: StrokePath, anchor: AnchorPoint, point: Point): Boolean {
+        val last = stroke.points.lastOrNull() ?: return true
+        val lastViewPoint = coordinateMapper.toViewPoint(last)
+        if (lastViewPoint != null && lastViewPoint.distance(point) < freehandMinPointDistancePx) {
+            return false
+        }
+
+        return !(last.line == anchor.line &&
+            last.column == anchor.column &&
+            abs(last.dx - anchor.dx) < 2 &&
+            abs(last.dy - anchor.dy) < 2)
     }
 
     private fun convertViewStrokeToAnchors(stroke: StrokePath): StrokePath {

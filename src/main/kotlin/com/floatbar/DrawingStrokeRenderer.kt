@@ -10,6 +10,8 @@ import java.awt.geom.Path2D
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.abs
+import kotlin.math.hypot
 
 class DrawingStrokeRenderer(
     private val canvasPadding: Int,
@@ -75,7 +77,7 @@ class DrawingStrokeRenderer(
         } else {
             if (contentPoints.size < 2) return null
             val path = if (stroke.kind == null) {
-                buildSmoothFreehandPath(contentPoints)
+                buildCornerPreservingFreehandPath(contentPoints)
             } else {
                 buildPolylinePath(contentPoints)
             }
@@ -173,7 +175,7 @@ class DrawingStrokeRenderer(
         return path
     }
 
-    private fun buildSmoothFreehandPath(points: List<Point>): Path2D.Float {
+    private fun buildCornerPreservingFreehandPath(points: List<Point>): Path2D.Float {
         val path = Path2D.Float()
         if (points.isEmpty()) return path
         if (points.size == 1) {
@@ -190,8 +192,15 @@ class DrawingStrokeRenderer(
         path.moveTo(points[0].x.toDouble(), points[0].y.toDouble())
 
         for (i in 1 until points.lastIndex) {
+            val previous = points[i - 1]
             val current = points[i]
             val next = points[i + 1]
+
+            if (shouldPreserveFreehandCorner(previous, current, next)) {
+                path.lineTo(current.x.toDouble(), current.y.toDouble())
+                continue
+            }
+
             val midX = (current.x + next.x) / 2.0
             val midY = (current.y + next.y) / 2.0
             path.quadTo(
@@ -202,16 +211,29 @@ class DrawingStrokeRenderer(
             )
         }
 
-        val penultimate = points[points.lastIndex - 1]
         val last = points.last()
-        path.quadTo(
-            penultimate.x.toDouble(),
-            penultimate.y.toDouble(),
-            last.x.toDouble(),
-            last.y.toDouble()
-        )
+        path.lineTo(last.x.toDouble(), last.y.toDouble())
 
         return path
+    }
+
+    private fun shouldPreserveFreehandCorner(previous: Point, current: Point, next: Point): Boolean {
+        val aX = (current.x - previous.x).toDouble()
+        val aY = (current.y - previous.y).toDouble()
+        val bX = (next.x - current.x).toDouble()
+        val bY = (next.y - current.y).toDouble()
+
+        val aLength = hypot(aX, aY)
+        val bLength = hypot(bX, bY)
+        if (aLength < 1.0 || bLength < 1.0) return true
+
+        val axisAlignedRun =
+            (abs(aX) <= 1.5 && abs(bX) <= 1.5) ||
+                (abs(aY) <= 1.5 && abs(bY) <= 1.5)
+        if (axisAlignedRun) return true
+
+        val cosine = ((aX * bX) + (aY * bY)) / (aLength * bLength)
+        return cosine < 0.72
     }
 }
 

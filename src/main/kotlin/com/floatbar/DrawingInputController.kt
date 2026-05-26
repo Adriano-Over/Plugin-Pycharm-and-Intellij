@@ -20,6 +20,8 @@ class DrawingInputController(
     private val onDrawPressed: (Point) -> Unit,
     private val onDrawDragged: (Point?, Point) -> Unit,
     private val onDrawReleased: () -> Unit,
+    private val onDrawGestureStarted: (Point) -> Unit,
+    private val onDrawGestureFinished: () -> Unit,
     private val onMouseWheel: (MouseWheelEvent) -> Unit,
     private val onPassthroughMouseEvent: (MouseEvent) -> Unit
 ) : MouseAdapter() {
@@ -33,13 +35,20 @@ class DrawingInputController(
             return
         }
 
+        val currentTool = currentToolProvider()
+        if (currentTool == FloatBarToolMode.DRAW) {
+            onDrawGestureStarted(e.point)
+        } else {
+            onDrawGestureFinished()
+        }
+
         val safePoint = clampPoint(e.point) ?: run {
             onToolPreviewPointChanged(null)
             return
         }
         onToolPreviewPointChanged(safePoint)
 
-        when (currentToolProvider()) {
+        when (currentTool) {
             FloatBarToolMode.FILL -> {
                 onFillPressed(safePoint)
                 lastDragPoint = null
@@ -69,13 +78,15 @@ class DrawingInputController(
             return
         }
 
+        val currentTool = currentToolProvider()
+
         val safePoint = clampPoint(e.point) ?: run {
             onToolPreviewPointChanged(null)
             return
         }
         onToolPreviewPointChanged(safePoint)
 
-        when (currentToolProvider()) {
+        when (currentTool) {
             FloatBarToolMode.FILL -> return
 
             FloatBarToolMode.ERASE -> {
@@ -123,6 +134,7 @@ class DrawingInputController(
             else -> {
                 lastDragPoint = null
                 onDrawReleased()
+                onDrawGestureFinished()
             }
         }
     }
@@ -143,5 +155,6 @@ class DrawingInputController(
 
     override fun mouseExited(e: MouseEvent) {
         onToolPreviewPointChanged(null)
+        onDrawGestureFinished()
     }
 }

@@ -52,6 +52,8 @@ class DrawingCanvasPanel(
     private val dirtyPaddingPx = 28
     private val eraseMinMovePx = 2.0
 
+    private val drawSampleSpacingPx = 3.0
+    private val freehandMinPointDistancePx = 3.0
     private val freehandSimplifyTolerancePx = 1.35
     private val freehandSimplifyMinPoints = 10
 
@@ -78,6 +80,7 @@ class DrawingCanvasPanel(
 
     private val strokePathTools = DrawingStrokePathTools(
         eraseRadius = eraseRadius,
+        drawSampleSpacingPx = drawSampleSpacingPx,
         freehandSimplifyTolerancePx = freehandSimplifyTolerancePx,
         freehandSimplifyMinPoints = freehandSimplifyMinPoints,
         toViewPoint = coordinateMapper::toViewPoint
@@ -116,6 +119,7 @@ class DrawingCanvasPanel(
         canvasPadding = canvasPadding,
         dirtyPaddingPx = dirtyPaddingPx,
         eraseRadius = eraseRadius,
+        freehandMinPointDistancePx = freehandMinPointDistancePx,
         eraseMinMovePx = eraseMinMovePx,
         shapeEdgeSpacing = shapeEdgeSpacing,
         ellipseSegments = ellipseSegments
@@ -153,6 +157,8 @@ class DrawingCanvasPanel(
             onDrawPressed = canvasController::handleDrawPressed,
             onDrawDragged = canvasController::handleDrawDragged,
             onDrawReleased = canvasController::handleDrawReleased,
+            onDrawGestureStarted = coordinateMapper::beginFreehandStraightWrap,
+            onDrawGestureFinished = coordinateMapper::endFreehandStraightWrap,
             onMouseWheel = ::forwardMouseWheelToEditor,
             onPassthroughMouseEvent = ::forwardMouseEventToEditor
         )
@@ -316,6 +322,7 @@ class DrawingCanvasPanel(
     }
 
     private fun setTool(tool: FloatBarToolMode, clearPreview: Boolean = true) {
+        coordinateMapper.endFreehandStraightWrap()
         val previousTool = currentTool
         currentTool = tool
         drawingStateService.setSelectedToolMode(tool)

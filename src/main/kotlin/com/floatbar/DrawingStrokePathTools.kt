@@ -8,6 +8,7 @@ import kotlin.math.roundToInt
 
 class DrawingStrokePathTools(
     private val eraseRadius: Double,
+    private val drawSampleSpacingPx: Double,
     private val freehandSimplifyTolerancePx: Double,
     private val freehandSimplifyMinPoints: Int,
     private val toViewPoint: (AnchorPoint) -> Point?
@@ -29,7 +30,7 @@ class DrawingStrokePathTools(
 
     fun buildDrawSamples(from: Point, to: Point): List<Point> {
         val distance = from.distance(to)
-        val steps = max(1, ceil(distance / 2.5).toInt())
+        val steps = max(1, ceil(distance / drawSampleSpacingPx.coerceAtLeast(1.0)).toInt())
         val points = ArrayList<Point>(steps)
         for (i in 1..steps) {
             val t = i.toDouble() / steps
