@@ -244,6 +244,7 @@ class FloatingBar(
 
         panel.add(headerPanel)
         panel.add(buttonColumn)
+        panel.add(createRecentSectionHeader())
         panel.add(recentGrid)
         contentPane.add(panel)
 
@@ -334,6 +335,18 @@ class FloatingBar(
             font = Font("Dialog", Font.BOLD, 9)
             foreground = Color(165, 165, 165)
             toolTipText = "$text controls"
+        }
+    }
+
+    private fun createRecentSectionHeader(): JLabel {
+        return JLabel("RECENT COLORS", SwingConstants.LEFT).apply {
+            preferredSize = Dimension(BAR_WIDTH + 16, 16)
+            maximumSize = Dimension(BAR_WIDTH + 16, 16)
+            border = BorderFactory.createEmptyBorder(0, 8, 0, 8)
+            alignmentX = CENTER_ALIGNMENT
+            font = Font("Dialog", Font.BOLD, 9)
+            foreground = Color(165, 165, 165)
+            toolTipText = "Recently used FloatBar colors"
         }
     }
 
@@ -632,9 +645,9 @@ class FloatingBar(
             "No drawings to clear in the current editor document"
         }
         if (hasDrawings) {
-            clearButton.background = Color(50, 50, 50)
-            clearButton.foreground = Color(220, 220, 220)
-            clearButton.border = BorderFactory.createLineBorder(Color(100, 100, 100), 1)
+            clearButton.background = Color(105, 55, 55)
+            clearButton.foreground = Color.WHITE
+            clearButton.border = BorderFactory.createLineBorder(Color(210, 115, 115), 1)
         } else {
             clearButton.background = Color(38, 38, 38)
             clearButton.foreground = Color(130, 130, 130)
@@ -692,10 +705,10 @@ class FloatingBar(
     }
 
     private fun updateToolButtonStyles() {
-        applyToolButtonStyle(drawingButton, activeTool == FloatBarToolMode.DRAW)
-        applyToolButtonStyle(erasingButton, activeTool == FloatBarToolMode.ERASE)
-        applyToolButtonStyle(fillButton, activeTool == FloatBarToolMode.FILL)
-        applyToolButtonStyle(shapeButton, activeTool == FloatBarToolMode.SHAPES)
+        applyToolButtonStyle(drawingButton, activeTool == FloatBarToolMode.DRAW, FloatBarToolMode.DRAW)
+        applyToolButtonStyle(erasingButton, activeTool == FloatBarToolMode.ERASE, FloatBarToolMode.ERASE)
+        applyToolButtonStyle(fillButton, activeTool == FloatBarToolMode.FILL, FloatBarToolMode.FILL)
+        applyToolButtonStyle(shapeButton, activeTool == FloatBarToolMode.SHAPES, FloatBarToolMode.SHAPES)
         updateToolStatusLabel()
     }
 
@@ -712,22 +725,27 @@ class FloatingBar(
     }
 
     private fun applyToolStatusLabelStyle() {
-        val (backgroundColor, borderColor) = when (activeTool) {
-            FloatBarToolMode.DRAW -> Color(58, 82, 135) to Color(140, 175, 255)
-            FloatBarToolMode.ERASE -> Color(112, 78, 50) to Color(230, 170, 100)
-            FloatBarToolMode.FILL -> Color(65, 105, 80) to Color(130, 205, 145)
-            FloatBarToolMode.SHAPES -> Color(92, 70, 125) to Color(190, 155, 245)
-        }
+        val (backgroundColor, borderColor) = toolAccentColors(activeTool)
         toolStatusLabel.background = backgroundColor
         toolStatusLabel.foreground = Color.WHITE
         toolStatusLabel.border = BorderFactory.createLineBorder(borderColor, 1)
     }
 
-    private fun applyToolButtonStyle(button: JButton, active: Boolean) {
+    private fun toolAccentColors(tool: FloatBarToolMode): Pair<Color, Color> {
+        return when (tool) {
+            FloatBarToolMode.DRAW -> Color(58, 82, 135) to Color(140, 175, 255)
+            FloatBarToolMode.ERASE -> Color(112, 78, 50) to Color(230, 170, 100)
+            FloatBarToolMode.FILL -> Color(65, 105, 80) to Color(130, 205, 145)
+            FloatBarToolMode.SHAPES -> Color(92, 70, 125) to Color(190, 155, 245)
+        }
+    }
+
+    private fun applyToolButtonStyle(button: JButton, active: Boolean, tool: FloatBarToolMode) {
         if (active) {
-            button.background = Color(80, 120, 200)
+            val (backgroundColor, borderColor) = toolAccentColors(tool)
+            button.background = backgroundColor
             button.foreground = Color.WHITE
-            button.border = BorderFactory.createLineBorder(Color(150, 190, 255), 1)
+            button.border = BorderFactory.createLineBorder(borderColor, 1)
         } else {
             button.background = Color(50, 50, 50)
             button.foreground = Color(220, 220, 220)
