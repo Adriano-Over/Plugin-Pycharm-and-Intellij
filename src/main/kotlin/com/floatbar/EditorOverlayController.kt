@@ -24,6 +24,7 @@ class EditorOverlayController(
     private val onOverlayChanged: (Boolean) -> Unit = {}
 ) : Disposable {
 
+    private var overlayEnabled = false
     private var overlayInstalled = false
     private var currentEditor: Editor? = null
     private var currentRootPane: JRootPane? = null
@@ -42,7 +43,7 @@ class EditorOverlayController(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
             object : FileEditorManagerListener {
                 override fun selectionChanged(event: FileEditorManagerEvent) {
-                    if (overlayInstalled) {
+                    if (overlayEnabled) {
                         bindToSelectedEditor()
                     }
                 }
@@ -50,19 +51,22 @@ class EditorOverlayController(
         )
     }
 
+    fun isEnabled(): Boolean = overlayEnabled
+
     fun isInstalled(): Boolean = overlayInstalled
 
     private fun setOverlayInstalled(installed: Boolean) {
         if (overlayInstalled == installed) return
         overlayInstalled = installed
-        onOverlayChanged(installed)
+        onOverlayChanged(overlayEnabled)
     }
 
     fun toggle() {
-        setEnabled(!overlayInstalled)
+        setEnabled(!overlayEnabled)
     }
 
     fun setEnabled(enabled: Boolean) {
+        overlayEnabled = enabled
         if (enabled) {
             bindToSelectedEditor()
         } else {
@@ -71,6 +75,12 @@ class EditorOverlayController(
     }
 
     fun uninstallOverlay() {
+        overlayEnabled = false
+        detachOverlayFromEditor()
+        onOverlayChanged(false)
+    }
+
+    private fun detachOverlayFromEditor() {
         setOverlayInstalled(false)
         detachListeners()
 
@@ -89,7 +99,7 @@ class EditorOverlayController(
 
     private fun bindToSelectedEditor() {
         val editor = FileEditorManager.getInstance(project).selectedTextEditor ?: run {
-            uninstallOverlay()
+            detachOverlayFromEditor()
             return
         }
         bindToEditor(editor)
@@ -107,11 +117,11 @@ class EditorOverlayController(
 
         val editorComponent = editor.contentComponent
         val rootPane = SwingUtilities.getRootPane(editorComponent) ?: run {
-            uninstallOverlay()
+            detachOverlayFromEditor()
             return
         }
         val layeredPane = rootPane.layeredPane ?: run {
-            uninstallOverlay()
+            detachOverlayFromEditor()
             return
         }
 
@@ -121,7 +131,10 @@ class EditorOverlayController(
         currentEditorComponent = editorComponent
 
         canvasPanel.bindEditor(editor)
-        layeredPane.add(canvasPanel, JLayeredPane.PALETTE_LAYER)
+        canvasPanel.isOpaque = false
+        canvasPanel.background = java.awt.Color(0, 0, 0, 0)
+        layeredPane.setLayer(canvasPanel, JLayeredPane.PALETTE_LAYER)
+        layeredPane.add(canvasPanel)
         setOverlayInstalled(true)
         attachListeners(editor, rootPane)
         updateOverlayBounds()

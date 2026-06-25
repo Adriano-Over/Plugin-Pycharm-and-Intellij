@@ -40,6 +40,8 @@ private val strokeIdSequence = AtomicLong(1L)
 
 private fun nextStrokeId(): Long = strokeIdSequence.getAndIncrement()
 
+fun nextStrokeObjectGroupId(): Long = nextStrokeId()
+
 data class StrokePath(
     val id: Long = nextStrokeId(),
     val color: Color,
@@ -47,6 +49,8 @@ data class StrokePath(
     val points: MutableList<AnchorPoint> = mutableListOf(),
     val filled: Boolean = false,
     val kind: ShapeKind? = null,
+    var objectGroupId: Long = 0L,
+    var rigidObjectAnchor: Boolean = false,
     /**
      * Runtime-only baseline used to keep a whole stroke visually stable when unrelated
      * folded code above it expands/collapses. This avoids correcting each point by a
@@ -62,7 +66,20 @@ data class StrokePath(
         points = points.map { it.copy() }.toMutableList(),
         filled = filled,
         kind = kind,
+        objectGroupId = objectGroupId,
+        rigidObjectAnchor = rigidObjectAnchor,
         foldLayoutAnchorLine = foldLayoutAnchorLine,
         foldLayoutAnchorBaseY = foldLayoutAnchorBaseY
     )
 }
+
+fun StrokePath.usesRigidObjectAnchoring(): Boolean {
+    return rigidObjectAnchor || kind?.usesRigidObjectAnchoring() == true
+}
+
+data class CollapsedFoldRegionSnapshot(
+    val startOffset: Int,
+    val endOffset: Int,
+    val placeholderPoint: java.awt.Point,
+    val placeholderWidth: Int
+)

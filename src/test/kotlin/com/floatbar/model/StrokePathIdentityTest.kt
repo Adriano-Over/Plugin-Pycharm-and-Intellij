@@ -1,17 +1,15 @@
-package com.floatbar
+package com.floatbar.model
 
+import com.floatbar.AnchorPoint
+import com.floatbar.StrokePath
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Test
 import java.awt.Color
 
-/** Framework-agnostic regression checks for stable stroke identity semantics. */
-object StrokePathIdentityRegressionChecks {
-
-    fun runAll() {
-        deepCopyPreservesStableStrokeId()
-        newStrokesReceiveDistinctIds()
-        deepCopyDetachesMutablePointList()
-    }
-
-    fun deepCopyPreservesStableStrokeId() {
+class StrokePathIdentityTest {
+    @Test
+    fun `deep copy preserves stable stroke id`() {
         val original = StrokePath(
             color = Color.RED,
             width = 2f,
@@ -20,17 +18,19 @@ object StrokePathIdentityRegressionChecks {
 
         val copy = original.deepCopy()
 
-        check(original.id == copy.id)
+        assertEquals(original.id, copy.id)
     }
 
-    fun newStrokesReceiveDistinctIds() {
+    @Test
+    fun `new strokes receive distinct ids`() {
         val first = StrokePath(color = Color.RED, width = 2f)
         val second = StrokePath(color = Color.BLUE, width = 2f)
 
-        check(first.id != second.id)
+        assertNotEquals(first.id, second.id)
     }
 
-    fun deepCopyDetachesMutablePointList() {
+    @Test
+    fun `deep copy detaches mutable point list`() {
         val original = StrokePath(
             color = Color.RED,
             width = 2f,
@@ -40,7 +40,7 @@ object StrokePathIdentityRegressionChecks {
 
         copy.points += AnchorPoint(0, 0, 20, 20)
 
-        check(original.points.size == 1)
-        check(copy.points.size == 2)
+        assertEquals(1, original.points.size)
+        assertEquals(2, copy.points.size)
     }
 }

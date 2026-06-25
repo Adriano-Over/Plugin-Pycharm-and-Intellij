@@ -12,12 +12,14 @@ object PaintGeometryEngine {
         strokes: List<StrokePath>,
         localPoint: Point,
         radius: Double,
+        toAnchor: (Point) -> AnchorPoint?,
         toViewPoint: (AnchorPoint) -> Point?
     ): MutableList<StrokePath> {
         return EraseGeometryEngine.eraseAlongPath(
             strokes = strokes,
             localPoints = listOf(localPoint),
             radius = radius,
+            toAnchor = toAnchor,
             toViewPoint = toViewPoint
         )
     }
@@ -26,12 +28,14 @@ object PaintGeometryEngine {
         strokes: List<StrokePath>,
         localPoints: List<Point>,
         radius: Double,
+        toAnchor: (Point) -> AnchorPoint?,
         toViewPoint: (AnchorPoint) -> Point?
     ): MutableList<StrokePath> {
         return EraseGeometryEngine.eraseAlongPath(
             strokes = strokes,
             localPoints = localPoints,
             radius = radius,
+            toAnchor = toAnchor,
             toViewPoint = toViewPoint
         )
     }
@@ -40,12 +44,14 @@ object PaintGeometryEngine {
         strokes: List<StrokePath>,
         localPoints: List<Point>,
         radius: Double,
+        toAnchor: (Point) -> AnchorPoint?,
         toViewPoint: (AnchorPoint) -> Point?
     ): LinkedHashMap<Long, MutableList<StrokePath>> {
         return EraseGeometryEngine.eraseAlongPathByStroke(
             strokes = strokes,
             localPoints = localPoints,
             radius = radius,
+            toAnchor = toAnchor,
             toViewPoint = toViewPoint
         )
     }
@@ -78,3 +84,4 @@ object PaintGeometryEngine {
         return GeometryAreaUtils.buildArea(stroke, toViewPoint)
     }
 }
+

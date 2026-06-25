@@ -1,31 +1,27 @@
 package com.floatbar
 
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.editor.FoldRegion
-import com.intellij.openapi.editor.LogicalPosition
 import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
-import java.awt.Polygon
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.geom.Ellipse2D
+import java.awt.geom.RoundRectangle2D
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
-import kotlin.math.PI
 import kotlin.math.ceil
-import kotlin.math.cos
-import kotlin.math.max
-import kotlin.math.sin
 
 class DrawingCanvasPainter(
     private val canvas: JPanel,
     private val editorProvider: () -> Editor?,
     private val currentStrokesProvider: () -> List<StrokePath>,
     private val shapePreviewProvider: () -> StrokePath?,
+    private val collapsedFoldRegionsProvider: () -> List<CollapsedFoldRegionSnapshot> = { emptyList() },
+    private val selectedStrokeIdsProvider: () -> Set<Long> = { emptySet() },
     private val gridEnabledProvider: () -> Boolean,
     private val currentToolProvider: () -> FloatBarToolMode,
     private val toolPreviewPointProvider: () -> Point?,
@@ -62,13 +58,15 @@ class DrawingCanvasPainter(
             clip.width,
             clip.height
         )
+        val collapsedFoldRegions = collapsedFoldRegionsProvider()
         val gContent = g.create() as Graphics2D
         gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
 
         try {
-            val renderedCollapsedMarkerKeys = mutableSetOf<CollapsedDrawingMarkerKey>()
-
             for (stroke in currentStrokesProvider()) {
+                if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(stroke, collapsedFoldRegions)) {
+                    continue
+                }
                 val bounds = boundsMap[stroke.id]
                     ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
                 if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
@@ -76,13 +74,18 @@ class DrawingCanvasPainter(
                         g = gContent,
                         stroke = stroke,
                         preview = false,
-                        visibleContentClip = contentClip,
-                        renderedCollapsedMarkerKeys = renderedCollapsedMarkerKeys
+                        visibleContentClip = contentClip
                     )
                 }
             }
 
+            paintSelectionHighlight(gContent, contentClip)
+            paintCollapsedFoldMarkers(gContent, collapsedFoldRegions, contentClip)
+
             shapePreviewProvider()?.let { preview ->
+                if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(preview, collapsedFoldRegions)) {
+                    return@let
+                }
                 val previewBounds = DrawingViewportTools.computeStrokeLineBounds(preview)
                 val previewGeometry = strokeWorkspace.buildStrokeGeometryContent(preview)
                 if (previewBounds != null &&
@@ -109,6 +112,151 @@ class DrawingCanvasPainter(
         paintToolPreview(g)
     }
 
+
+    fun paintEditorContent(graphics: Graphics) {
+        val currentEditor = editorProvider() ?: return
+        val g = graphics as? Graphics2D ?: return
+
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+
+        val clip = g.clipBounds ?: currentEditor.scrollingModel.visibleArea
+        val lineHeight = currentEditor.lineHeight.takeIf { it > 0 } ?: 16
+
+        if (gridEnabledProvider()) {
+            strokeRenderer.paintGridWithEdge(
+                g = g,
+                cellSize = lineHeight,
+                clip = clip,
+                width = currentEditor.contentComponent.width.coerceAtLeast(clip.x + clip.width),
+                height = currentEditor.contentComponent.height.coerceAtLeast(clip.y + clip.height)
+            )
+        }
+
+        val visibleLineRange = DrawingViewportTools.resolveVisibleLineRangeInContent(currentEditor, clip)
+        val boundsMap = strokeWorkspace.currentStrokeBounds()
+        for (stroke in currentStrokesProvider()) {
+            val bounds = boundsMap[stroke.id]
+                ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
+            if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
+                paintStroke(
+                    g = g,
+                    stroke = stroke,
+                    preview = false,
+                    visibleContentClip = clip
+                )
+            }
+        }
+
+        paintSelectionHighlight(g, clip)
+        paintCollapsedFoldMarkers(g, collapsedFoldRegionsProvider(), clip)
+
+        shapePreviewProvider()?.let { preview ->
+            if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(preview, collapsedFoldRegionsProvider())) {
+                return@let
+            }
+            val previewBounds = DrawingViewportTools.computeStrokeLineBounds(preview)
+            val previewGeometry = strokeWorkspace.buildStrokeGeometryContent(preview)
+            if (previewBounds != null &&
+                previewGeometry != null &&
+                previewBounds.maxLine >= visibleLineRange.first &&
+                previewBounds.minLine <= visibleLineRange.second &&
+                previewGeometry.bounds.intersects(clip)
+            ) {
+                strokeRenderer.paintStroke(
+                    g = g,
+                    stroke = preview,
+                    geometry = previewGeometry,
+                    preview = true,
+                    visibleContentClip = clip
+                )
+                paintShapePreviewHandles(g, preview, previewGeometry, clip)
+                paintShapePreviewBadge(g, preview, previewGeometry, clip)
+            }
+        }
+
+        paintToolPreviewInEditorContent(g, currentEditor)
+    }
+
+    private fun paintCollapsedFoldMarkers(
+        g: Graphics2D,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>,
+        visibleContentClip: Rectangle
+    ) {
+        if (collapsedRegions.isEmpty()) return
+
+        val hiddenRegions = DrawingViewportTools.collapsedFoldMarkersFor(currentStrokesProvider(), collapsedRegions)
+        if (hiddenRegions.isEmpty()) return
+
+        // FIX: don't call g.create() here — g is already the correctly translated
+        // gContent context passed from paint(). Creating a child context via g.create()
+        // drops the translation set on gContent, placing the star in canvas coords
+        // instead of content coords, causing visible misalignment.
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        val savedHint = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING) // optional: restore after
+
+        for (region in hiddenRegions) {
+            val point = region.placeholderPoint
+            val starX = point.x + region.placeholderWidth + 32
+            val starY = point.y + 10
+            if (!visibleContentClip.contains(starX, starY)) continue
+            drawStar(g, starX, starY, 6, Color(255, 215, 80, 230))
+        }
+    }
+
+    private fun drawStar(g: Graphics2D, centerX: Int, centerY: Int, radius: Int, color: Color) {
+        val outer = radius.toDouble()
+        val inner = outer * 0.45
+        val points = ArrayList<Point>(10)
+        for (i in 0 until 10) {
+            val angle = -Math.PI / 2 + i * Math.PI / 5
+            val r = if (i % 2 == 0) outer else inner
+            points += Point(
+                (centerX + kotlin.math.cos(angle) * r).toInt(),
+                (centerY + kotlin.math.sin(angle) * r).toInt()
+            )
+        }
+        val polygon = java.awt.Polygon()
+        points.forEach { polygon.addPoint(it.x, it.y) }
+        g.color = color
+        g.fillPolygon(polygon)
+        g.color = Color(20, 20, 20, 160)
+        g.drawPolygon(polygon)
+    }
+
+    private fun paintToolPreviewInEditorContent(g: Graphics2D, editor: Editor) {
+        if (currentToolProvider() != FloatBarToolMode.ERASE) return
+        val canvasPoint = toolPreviewPointProvider() ?: return
+        val contentPoint = SwingUtilities.convertPoint(canvas, canvasPoint, editor.contentComponent)
+        val radius = ceil(eraseRadiusProvider()).toInt().coerceAtLeast(1)
+
+        val gPreview = g.create() as Graphics2D
+        try {
+            gPreview.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+
+            val diameter = radius * 2
+            val circle = Ellipse2D.Double(
+                (contentPoint.x - radius).toDouble(),
+                (contentPoint.y - radius).toDouble(),
+                diameter.toDouble(),
+                diameter.toDouble()
+            )
+
+            gPreview.stroke = BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            gPreview.color = Color(255, 255, 255, 190)
+            gPreview.draw(circle)
+
+            gPreview.stroke = BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+            gPreview.color = Color(30, 30, 30, 180)
+            gPreview.draw(circle)
+
+            val centerTick = 3
+            gPreview.drawLine(contentPoint.x - centerTick, contentPoint.y, contentPoint.x + centerTick, contentPoint.y)
+            gPreview.drawLine(contentPoint.x, contentPoint.y - centerTick, contentPoint.x, contentPoint.y + centerTick)
+        } finally {
+            gPreview.dispose()
+        }
+    }
+
     private fun paintShapePreviewHandles(
         g: Graphics2D,
         preview: StrokePath,
@@ -116,7 +264,7 @@ class DrawingCanvasPainter(
         visibleContentClip: Rectangle
     ) {
         val kind = preview.kind ?: return
-        if (kind == ShapeKind.LINE || kind == ShapeKind.ARROW) return
+        if (kind == ShapeKind.LINE) return
 
         val bounds = geometry.bounds
         if (bounds.width <= 0 || bounds.height <= 0 || !bounds.intersects(visibleContentClip)) return
@@ -147,6 +295,51 @@ class DrawingCanvasPainter(
             }
         } finally {
             gHandles.dispose()
+        }
+    }
+
+    private fun paintSelectionHighlight(g: Graphics2D, visibleContentClip: Rectangle) {
+        val selectedIds = selectedStrokeIdsProvider()
+        if (selectedIds.isEmpty()) return
+
+        val selectedBounds = currentStrokesProvider()
+            .asSequence()
+            .filter { it.id in selectedIds }
+            .mapNotNull { strokeWorkspace.getOrBuildStrokeGeometryContent(it)?.bounds }
+            .fold(null as Rectangle?) { union, bounds ->
+                if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
+            }
+            ?: return
+
+        selectedBounds.grow(8, 8)
+        if (!selectedBounds.intersects(visibleContentClip)) return
+
+        val highlight = RoundRectangle2D.Double(
+            selectedBounds.x.toDouble(),
+            selectedBounds.y.toDouble(),
+            selectedBounds.width.toDouble(),
+            selectedBounds.height.toDouble(),
+            12.0,
+            12.0
+        )
+
+        val gSelection = g.create() as Graphics2D
+        try {
+            gSelection.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            gSelection.color = Color(40, 160, 220, 35)
+            gSelection.fill(highlight)
+            gSelection.stroke = BasicStroke(
+                1.6f,
+                BasicStroke.CAP_ROUND,
+                BasicStroke.JOIN_ROUND,
+                10f,
+                floatArrayOf(8f, 5f),
+                0f
+            )
+            gSelection.color = Color(115, 220, 255, 220)
+            gSelection.draw(highlight)
+        } finally {
+            gSelection.dispose()
         }
     }
 
@@ -251,26 +444,27 @@ class DrawingCanvasPainter(
         g: Graphics2D,
         stroke: StrokePath,
         preview: Boolean,
-        visibleContentClip: Rectangle?,
-        renderedCollapsedMarkerKeys: MutableSet<CollapsedDrawingMarkerKey>? = null
+        visibleContentClip: Rectangle?
     ) {
-        val editor = editorProvider()
-        if (!preview && editor != null && paintFoldAwareStroke(
-                g = g,
-                editor = editor,
-                stroke = stroke,
-                visibleContentClip = visibleContentClip,
-                renderedCollapsedMarkerKeys = renderedCollapsedMarkerKeys
-            )
-        ) {
-            return
-        }
-
+        // Paint the stroke as one continuous geometry.
+        //
+        // The old fold-aware branch split strokes point-by-point when an anchor offset
+        // landed inside a collapsed fold. That caused freehand strokes to break into
+        // fragments and caused shape strokes to disappear almost completely because
+        // shapes were not repainted after the split. It also read the editor folding
+        // model from Swing paint code, which triggered IntelliJ read-access errors.
+        //
+        // Collapsed-fold markers should be rebuilt later from a cached/read-action-safe
+        // model. The normal paint path must stay geometry-only and must not read
+        // foldingModel during paintComponent().
         val geometry = if (preview) {
             strokeWorkspace.buildStrokeGeometryContent(stroke)
         } else {
             strokeWorkspace.getOrBuildStrokeGeometryContent(stroke)
-        } ?: return
+        } ?: run {
+            FloatBarDiagnosticLog.warn("PAINTER", "paintStroke skipped nullGeometry preview=$preview ${FloatBarDiagnosticLog.strokeSummary(stroke)}")
+            return
+        }
 
         strokeRenderer.paintStroke(
             g = g,
@@ -280,175 +474,5 @@ class DrawingCanvasPainter(
             visibleContentClip = visibleContentClip
         )
     }
-
-    private fun paintFoldAwareStroke(
-        g: Graphics2D,
-        editor: Editor,
-        stroke: StrokePath,
-        visibleContentClip: Rectangle?,
-        renderedCollapsedMarkerKeys: MutableSet<CollapsedDrawingMarkerKey>?
-    ): Boolean {
-        if (stroke.points.isEmpty()) return false
-
-        val hiddenMarkers = linkedSetOf<CollapsedDrawingMarker>()
-        val visibleSegments = mutableListOf<MutableList<AnchorPoint>>()
-        var currentSegment = mutableListOf<AnchorPoint>()
-        var hasHiddenPoint = false
-
-        for (point in stroke.points) {
-            val foldedRegion = collapsedRegionFor(point, editor)
-            if (foldedRegion == null) {
-                currentSegment.add(point)
-            } else {
-                hasHiddenPoint = true
-                hiddenMarkers.add(
-                    CollapsedDrawingMarker(
-                        startOffset = foldedRegion.startOffset,
-                        endOffset = foldedRegion.endOffset,
-                        colorRgb = stroke.color.rgb
-                    )
-                )
-                if (currentSegment.isNotEmpty()) {
-                    visibleSegments.add(currentSegment)
-                    currentSegment = mutableListOf()
-                }
-            }
-        }
-
-        if (!hasHiddenPoint) return false
-
-        if (currentSegment.isNotEmpty()) {
-            visibleSegments.add(currentSegment)
-        }
-
-        if (!stroke.filled && stroke.kind == null) {
-            for (segment in visibleSegments) {
-                if (segment.size < 2) continue
-                val segmentStroke = StrokePath(
-                    color = stroke.color,
-                    width = stroke.width,
-                    points = segment.map { it.copy() }.toMutableList(),
-                    filled = false,
-                    kind = null,
-                    foldLayoutAnchorLine = stroke.foldLayoutAnchorLine,
-                    foldLayoutAnchorBaseY = stroke.foldLayoutAnchorBaseY
-                )
-                val segmentGeometry = strokeWorkspace.buildStrokeGeometryContent(segmentStroke) ?: continue
-                strokeRenderer.paintStroke(
-                    g = g,
-                    stroke = segmentStroke,
-                    geometry = segmentGeometry,
-                    preview = false,
-                    visibleContentClip = visibleContentClip
-                )
-            }
-        }
-
-        paintCollapsedDrawingMarkers(
-            g = g,
-            editor = editor,
-            markers = hiddenMarkers,
-            visibleContentClip = visibleContentClip,
-            renderedCollapsedMarkerKeys = renderedCollapsedMarkerKeys
-        )
-        return true
-    }
-
-    private fun collapsedRegionFor(point: AnchorPoint, editor: Editor): FoldRegion? {
-        val document = editor.document
-        if (document.textLength <= 0) return null
-
-        val safeOffset = point.offset.coerceIn(0, document.textLength)
-        val region = editor.foldingModel.getCollapsedRegionAtOffset(safeOffset) ?: return null
-        if (region.isExpanded) return null
-        if (safeOffset <= region.startOffset || safeOffset >= region.endOffset) return null
-
-        return region
-    }
-
-    private fun paintCollapsedDrawingMarkers(
-        g: Graphics2D,
-        editor: Editor,
-        markers: Set<CollapsedDrawingMarker>,
-        visibleContentClip: Rectangle?,
-        renderedCollapsedMarkerKeys: MutableSet<CollapsedDrawingMarkerKey>?
-    ) {
-        if (markers.isEmpty()) return
-
-        val gMarker = g.create() as Graphics2D
-        try {
-            gMarker.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            gMarker.stroke = BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-
-            for (marker in markers) {
-                val markerKey = CollapsedDrawingMarkerKey(marker.startOffset, marker.endOffset)
-                if (renderedCollapsedMarkerKeys != null && markerKey in renderedCollapsedMarkerKeys) continue
-
-                if (paintCollapsedDrawingMarker(gMarker, editor, marker, visibleContentClip)) {
-                    renderedCollapsedMarkerKeys?.add(markerKey)
-                }
-            }
-        } finally {
-            gMarker.dispose()
-        }
-    }
-
-    private fun paintCollapsedDrawingMarker(
-        g: Graphics2D,
-        editor: Editor,
-        marker: CollapsedDrawingMarker,
-        visibleContentClip: Rectangle?
-    ): Boolean {
-        val document = editor.document
-        if (document.lineCount <= 0) return false
-
-        val safeOffset = marker.startOffset.coerceIn(0, document.textLength)
-        val line = document.getLineNumber(safeOffset).coerceIn(0, document.lineCount - 1)
-        val lineStart = editor.logicalPositionToXY(LogicalPosition(line, 0))
-        val lineEndOffset = document.getLineEndOffset(line)
-        val lineEndPoint = editor.logicalPositionToXY(editor.offsetToLogicalPosition(lineEndOffset))
-
-        val starRadius = 6
-        val starDiameter = starRadius * 2
-        val starLeftX = max(lineStart.x, lineEndPoint.x) + 40
-        val centerX = starLeftX + starRadius
-        val centerY = lineStart.y + editor.lineHeight / 2
-        val bounds = Rectangle(starLeftX, centerY - starRadius, starDiameter, starDiameter)
-        if (visibleContentClip != null && !bounds.intersects(visibleContentClip)) return false
-
-        val star = createStarPolygon(centerX, centerY, outerRadius = starRadius, innerRadius = 3)
-        g.color = Color(255, 215, 0, 240)
-        g.fillPolygon(star)
-        g.color = Color(150, 110, 0, 235)
-        g.stroke = BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
-        g.drawPolygon(star)
-        return true
-    }
-
-    private fun createStarPolygon(centerX: Int, centerY: Int, outerRadius: Int, innerRadius: Int): Polygon {
-        val polygon = Polygon()
-        val points = 10
-        val startAngle = -PI / 2.0
-
-        for (index in 0 until points) {
-            val radius = if (index % 2 == 0) outerRadius else innerRadius
-            val angle = startAngle + index * PI / 5.0
-            val x = centerX + (cos(angle) * radius).toInt()
-            val y = centerY + (sin(angle) * radius).toInt()
-            polygon.addPoint(x, y)
-        }
-
-        return polygon
-    }
-
-    private data class CollapsedDrawingMarker(
-        val startOffset: Int,
-        val endOffset: Int,
-        val colorRgb: Int
-    )
-
-    private data class CollapsedDrawingMarkerKey(
-        val startOffset: Int,
-        val endOffset: Int
-    )
 }
+

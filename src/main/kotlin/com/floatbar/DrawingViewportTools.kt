@@ -10,6 +10,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 object DrawingViewportTools {
+    private const val OBJECT_ANCHOR_LINE_ESTIMATE_PX = 8
+
     fun computeStrokeLineBounds(stroke: StrokePath): StrokeLineBounds? {
         if (stroke.points.isEmpty()) return null
 
@@ -21,7 +23,28 @@ object DrawingViewportTools {
             maxLine = max(maxLine, point.line)
         }
 
-        return if (minLine == Int.MAX_VALUE) null else StrokeLineBounds(minLine, maxLine)
+        if (minLine == Int.MAX_VALUE) return null
+
+        if (stroke.usesRigidObjectAnchoring() && minLine == maxLine) {
+            val minDy = stroke.points.minOf { it.dy }
+            val maxDy = stroke.points.maxOf { it.dy }
+            val topLineOffset = Math.floorDiv(minDy, OBJECT_ANCHOR_LINE_ESTIMATE_PX) - 1
+            val bottomLineOffset = Math.ceil(maxDy.toDouble() / OBJECT_ANCHOR_LINE_ESTIMATE_PX.toDouble()).toInt() + 1
+            minLine = min(minLine, minLine + topLineOffset)
+            maxLine = max(maxLine, maxLine + bottomLineOffset)
+        }
+
+        return StrokeLineBounds(minLine.coerceAtLeast(0), maxLine.coerceAtLeast(0))
+    }
+
+    fun shouldUseRigidObjectAnchorForFreehand(
+        stroke: StrokePath,
+        toViewPoint: (AnchorPoint) -> Point?
+    ): Boolean {
+        if (stroke.rigidObjectAnchor || stroke.kind != null || stroke.filled || stroke.points.size < 2) return false
+
+        val viewPoints = stroke.points.mapNotNull(toViewPoint)
+        return viewPoints.size >= 2
     }
 
     fun computeEraseCandidateLineRange(
@@ -38,7 +61,7 @@ object DrawingViewportTools {
         var maxLine = Int.MIN_VALUE
 
         for (point in points) {
-            val clamped = coordinateMapper.clampPointToDrawableArea(point) ?: continue
+            val clamped = coordinateMapper.clampPointToDrawableArea(point, allowCodeArea = true) ?: continue
             val editorPoint = SwingUtilities.convertPoint(canvas, clamped, editor.contentComponent)
             val lineInfo = coordinateMapper.resolveLineInfo(editorPoint) ?: continue
             minLine = min(minLine, lineInfo.line)
@@ -125,6 +148,33 @@ object DrawingViewportTools {
         )
     }
 
+    fun isStrokeHiddenByCollapsedFold(
+        stroke: StrokePath,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>
+    ): Boolean {
+        if (stroke.points.isEmpty() || collapsedRegions.isEmpty()) return false
+
+        val strokeOffsets = stroke.points.map { it.offset }
+        return collapsedRegions.any { region ->
+            strokeOffsets.all { offset -> offset in region.startOffset..region.endOffset }
+        }
+    }
+
+    fun collapsedFoldMarkersFor(
+        strokes: Iterable<StrokePath>,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>
+    ): List<CollapsedFoldRegionSnapshot> {
+        if (collapsedRegions.isEmpty()) return emptyList()
+        val hiddenRegions = linkedSetOf<CollapsedFoldRegionSnapshot>()
+        for (stroke in strokes) {
+            if (!isStrokeHiddenByCollapsedFold(stroke, collapsedRegions)) continue
+            collapsedRegions.firstOrNull { region ->
+                stroke.points.map { it.offset }.all { offset -> offset in region.startOffset..region.endOffset }
+            }?.let(hiddenRegions::add)
+        }
+        return hiddenRegions.toList()
+    }
+
     fun computeStrokesViewBounds(
         strokes: Iterable<StrokePath>,
         toViewPoint: (AnchorPoint) -> Point?,
@@ -164,6 +214,23 @@ object DrawingViewportTools {
 
         val topLine = editor.xyToLogicalPosition(topEditorPoint).line.coerceIn(0, document.lineCount - 1)
         val bottomLine = editor.xyToLogicalPosition(bottomEditorPoint).line.coerceIn(0, document.lineCount - 1)
+
+        return (topLine - linePadding).coerceAtLeast(0) to
+            (bottomLine + linePadding).coerceAtMost(document.lineCount - 1)
+    }
+
+    fun resolveVisibleLineRangeInContent(
+        editor: Editor,
+        clip: Rectangle,
+        linePadding: Int = 2
+    ): Pair<Int, Int> {
+        val document = editor.document
+        if (document.lineCount <= 0) return 0 to 0
+
+        val topLeft = Point(clip.x, clip.y)
+        val bottomRight = Point(clip.x + clip.width, clip.y + clip.height)
+        val topLine = editor.xyToLogicalPosition(topLeft).line.coerceIn(0, document.lineCount - 1)
+        val bottomLine = editor.xyToLogicalPosition(bottomRight).line.coerceIn(0, document.lineCount - 1)
 
         return (topLine - linePadding).coerceAtLeast(0) to
             (bottomLine + linePadding).coerceAtMost(document.lineCount - 1)

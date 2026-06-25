@@ -8,16 +8,19 @@ import java.awt.geom.Path2D
 
 internal object EraseGeometryEngine {
 
+    private const val ERASE_SEGMENT_SAMPLE_STEP_PX = 3.0
+
     fun eraseAlongPath(
         strokes: List<StrokePath>,
         localPoints: List<Point>,
         radius: Double,
+        toAnchor: (Point) -> AnchorPoint?,
         toViewPoint: (AnchorPoint) -> Point?
     ): MutableList<StrokePath> {
         if (localPoints.isEmpty()) return strokes.map { it.deepCopy() }.toMutableList()
 
         val rebuilt = mutableListOf<StrokePath>()
-        for (replacements in eraseAlongPathByStroke(strokes, localPoints, radius, toViewPoint).values) {
+        for (replacements in eraseAlongPathByStroke(strokes, localPoints, radius, toAnchor, toViewPoint).values) {
             rebuilt += replacements
         }
         return rebuilt
@@ -27,6 +30,7 @@ internal object EraseGeometryEngine {
         strokes: List<StrokePath>,
         localPoints: List<Point>,
         radius: Double,
+        toAnchor: (Point) -> AnchorPoint?,
         toViewPoint: (AnchorPoint) -> Point?
     ): LinkedHashMap<Long, MutableList<StrokePath>> {
         val rebuiltByStroke = LinkedHashMap<Long, MutableList<StrokePath>>()
@@ -53,8 +57,10 @@ internal object EraseGeometryEngine {
                     area.subtract(eraserArea)
                     GeometryAreaUtils.areaToFilledStrokes(area, stroke.color, stroke.width)
                 }
+            } else if (stroke.kind?.isClosedOutline() == true) {
+                cutClosedOutlineStrokeByEraserArea(stroke, eraserArea, toAnchor, toViewPoint)
             } else {
-                cutStrokeByEraserArea(stroke, eraserArea, toViewPoint)
+                cutStrokeByEraserArea(stroke, eraserArea, toAnchor, toViewPoint)
             }
 
             rebuiltByStroke[stroke.id] = rebuilt
@@ -124,10 +130,39 @@ internal object EraseGeometryEngine {
         return area
     }
 
+    private fun cutClosedOutlineStrokeByEraserArea(
+        stroke: StrokePath,
+        eraserArea: Area,
+        toAnchor: (Point) -> AnchorPoint?,
+        toViewPoint: (AnchorPoint) -> Point?
+    ): MutableList<StrokePath> {
+        val normalizedPoints = normalizeClosedOutlinePoints(stroke.points)
+        if (normalizedPoints.size < 2) {
+            return mutableListOf(stroke.deepCopy())
+        }
+
+        val normalizedStroke = stroke.deepCopy().also { copy ->
+            copy.points.clear()
+            copy.points.addAll(normalizedPoints.map { it.copy() })
+        }
+        return cutStrokeByEraserArea(normalizedStroke, eraserArea, toAnchor, toViewPoint, preserveKind = false)
+    }
+
+    private fun normalizeClosedOutlinePoints(points: List<AnchorPoint>): List<AnchorPoint> {
+        if (points.size < 2) return points
+        return if (sameAnchor(points.first(), points.last())) {
+            points.dropLast(1)
+        } else {
+            points
+        }
+    }
+
     private fun cutStrokeByEraserArea(
         stroke: StrokePath,
         eraserArea: Area,
-        toViewPoint: (AnchorPoint) -> Point?
+        toAnchor: (Point) -> AnchorPoint?,
+        toViewPoint: (AnchorPoint) -> Point?,
+        preserveKind: Boolean = true
     ): MutableList<StrokePath> {
         val viewPoints = stroke.points.mapNotNull { anchor ->
             toViewPoint(anchor)?.let { anchor to it }
@@ -136,8 +171,21 @@ internal object EraseGeometryEngine {
             return mutableListOf(stroke.deepCopy())
         }
 
+        if (viewPoints.none { (_, point) -> eraserArea.contains(point.x.toDouble(), point.y.toDouble()) } &&
+            viewPoints.zipWithNext().none { (a, b) -> segmentIntersectsArea(eraserArea, a.second, b.second) }
+        ) {
+            return mutableListOf(stroke.deepCopy())
+        }
+
         val keptSegments = mutableListOf<MutableList<AnchorPoint>>()
         var current = mutableListOf<AnchorPoint>()
+
+        fun appendKept(anchor: AnchorPoint) {
+            val previous = current.lastOrNull()
+            if (previous == null || !sameAnchor(previous, anchor)) {
+                current += anchor
+            }
+        }
 
         fun flushCurrent() {
             if (current.size >= 2) {
@@ -149,13 +197,28 @@ internal object EraseGeometryEngine {
         for (i in 0 until viewPoints.lastIndex) {
             val (aAnchor, aPoint) = viewPoints[i]
             val (bAnchor, bPoint) = viewPoints[i + 1]
-            val hits = segmentIntersectsArea(eraserArea, aPoint, bPoint)
 
-            if (!hits) {
-                if (current.isEmpty()) current += aAnchor.copy()
-                current += bAnchor.copy()
-            } else {
-                flushCurrent()
+            val segmentLength = aPoint.distance(bPoint).coerceAtLeast(1.0)
+            val steps = maxOf(1, kotlin.math.ceil(segmentLength / ERASE_SEGMENT_SAMPLE_STEP_PX).toInt())
+
+            for (step in 0..steps) {
+                if (i > 0 && step == 0) continue
+
+                val t = step.toDouble() / steps.toDouble()
+                val point = interpolatePoint(aPoint, bPoint, t)
+                val anchor = toAnchor(point)?.copy() ?: if (step == 0) {
+                    aAnchor.copy()
+                } else if (step == steps) {
+                    bAnchor.copy()
+                } else {
+                    interpolateAnchor(aAnchor, bAnchor, t)
+                }
+
+                if (eraserArea.contains(point.x.toDouble(), point.y.toDouble())) {
+                    flushCurrent()
+                } else {
+                    appendKept(anchor)
+                }
             }
         }
 
@@ -163,15 +226,57 @@ internal object EraseGeometryEngine {
 
         if (keptSegments.isEmpty()) return mutableListOf()
 
+        val resultKind = if (preserveKind) stroke.kind else null
         return keptSegments.mapTo(mutableListOf()) { segment ->
             StrokePath(
                 color = stroke.color,
                 width = stroke.width,
                 points = segment,
                 filled = false,
-                kind = stroke.kind
+                kind = resultKind
             )
         }
+    }
+
+    private fun interpolatePoint(a: Point, b: Point, t: Double): Point {
+        return Point(
+            (a.x + (b.x - a.x) * t).toInt(),
+            (a.y + (b.y - a.y) * t).toInt()
+        )
+    }
+
+    private fun interpolateAnchor(a: AnchorPoint, b: AnchorPoint, t: Double): AnchorPoint {
+        fun lerpInt(start: Int, end: Int): Int = (start + (end - start) * t).toInt()
+
+        return AnchorPoint(
+            line = lerpInt(a.line, b.line),
+            column = lerpInt(a.column, b.column),
+            dx = lerpInt(a.dx, b.dx),
+            dy = lerpInt(a.dy, b.dy),
+            offset = lerpInt(a.offset, b.offset),
+            outsideCode = a.outsideCode && b.outsideCode,
+            afterLineEndPx = lerpInt(a.afterLineEndPx, b.afterLineEndPx),
+            foldHiddenHeightAbove = if (a.foldHiddenHeightAbove == b.foldHiddenHeightAbove) {
+                a.foldHiddenHeightAbove
+            } else {
+                UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
+            },
+            foldLayoutBaseY = if (a.foldLayoutBaseY == b.foldLayoutBaseY) {
+                a.foldLayoutBaseY
+            } else {
+                UNSET_FOLD_LAYOUT_BASE_Y
+            }
+        )
+    }
+
+    private fun sameAnchor(a: AnchorPoint, b: AnchorPoint): Boolean {
+        return a.line == b.line &&
+            a.column == b.column &&
+            a.dx == b.dx &&
+            a.dy == b.dy &&
+            a.offset == b.offset &&
+            a.outsideCode == b.outsideCode &&
+            a.afterLineEndPx == b.afterLineEndPx
     }
 
     private fun segmentIntersectsArea(area: Area, a: Point, b: Point): Boolean {

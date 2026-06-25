@@ -1,11 +1,16 @@
 package com.floatbar
 
-import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.components.SerializablePersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.SystemInfo
+import java.nio.file.Paths
+import java.util.Locale
 
 private const val UNSET_FLOATING_BAR_POSITION = Int.MIN_VALUE
+private const val PROJECT_DIR_MACRO = "\$PROJECT_DIR$"
 
 data class SavedPoint(
     var anchorStorageVersion: Int = 0,
@@ -26,7 +31,9 @@ data class SavedStroke(
     var width: Float = 3.5f,
     var points: MutableList<SavedPoint> = mutableListOf(),
     var filled: Boolean = false,
-    var kind: String? = null
+    var kind: String? = null,
+    var objectGroupId: Long = 0L,
+    var rigidObjectAnchor: Boolean = false
 )
 
 data class SavedFileDrawing(
@@ -40,9 +47,13 @@ data class DrawingState(
     var selectedColorRgb: Int = -65536,
     var gridEnabled: Boolean = true,
     var overlayEnabled: Boolean = true,
+    var interactionPassThroughEnabled: Boolean = false,
     var floatingBarVisible: Boolean = true,
     var selectedToolMode: String = FloatBarToolMode.DRAW.name,
     var selectedShapeKind: String = ShapeKind.RECTANGLE.name,
+    var selectedDrawingShapeKind: String = ShapeKind.RECTANGLE.name,
+    var selectedTextStyle: String = "",
+    var selectedBalloonTextStyle: String = BalloonTextStyle.SOLID.name,
     var floatingBarX: Int = UNSET_FLOATING_BAR_POSITION,
     var floatingBarY: Int = UNSET_FLOATING_BAR_POSITION
 )
@@ -52,70 +63,107 @@ data class DrawingState(
     name = "FloatBarDrawingState",
     storages = [Storage("floatbar-drawings.xml")]
 )
-class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
-
-    private var state = DrawingState()
-
-    override fun getState(): DrawingState = state
-
-    override fun loadState(state: DrawingState) {
-        this.state = state
-    }
+class FloatBarDrawingStateService(
+    private val project: Project
+) : SerializablePersistentStateComponent<DrawingState>(DrawingState()) {
 
     fun getStrokes(filePath: String): MutableList<SavedStroke> {
-        return state.files.firstOrNull { it.filePath == filePath }?.strokes ?: mutableListOf()
+        val lookupKey = fileComparisonKey(filePath)
+        if (lookupKey.isEmpty()) return mutableListOf()
+
+        val matches = state.files.filter { fileComparisonKey(it.filePath) == lookupKey }
+        if (matches.size > 1) {
+            FloatBarDiagnosticLog.warn(
+                category = "STATE",
+                message = "getStrokes found duplicate file entries count=${matches.size} key=$lookupKey; loading newest"
+            )
+            compactFileEntries()
+        }
+
+        return matches.lastOrNull()
+            ?.strokes
+            ?.map { it.deepCopy() }
+            ?.toMutableList()
+            ?: mutableListOf()
     }
 
     fun setStrokes(filePath: String, strokes: List<SavedStroke>) {
-        val existing = state.files.firstOrNull { it.filePath == filePath }
+        val storagePath = stableStoragePath(filePath)
+        val storageKey = fileComparisonKey(storagePath)
+        if (storageKey.isEmpty()) return
 
-        if (strokes.isEmpty()) {
-            if (existing != null) {
-                state.files.remove(existing)
-            }
-            return
-        }
+        updateState { oldState ->
+            val updatedFiles = oldState.files
+                .filterNot { fileComparisonKey(it.filePath) == storageKey }
+                .map { it.deepCopy() }
+                .toMutableList()
 
-        if (existing != null) {
-            existing.strokes = strokes.toMutableList()
-        } else {
-            state.files.add(
-                SavedFileDrawing(
-                    filePath = filePath,
-                    strokes = strokes.toMutableList()
+            if (strokes.isNotEmpty()) {
+                updatedFiles.add(
+                    SavedFileDrawing(
+                        filePath = storagePath,
+                        strokes = strokes.map { it.deepCopy() }.toMutableList()
+                    )
                 )
-            )
+            }
+
+            oldState.copy(files = updatedFiles)
         }
     }
 
-    fun getRecentColors(): MutableList<Int> = state.recentColors
+    fun compactFileEntries() {
+        val compactedFiles = compactFiles(state.files)
+        val currentFiles = state.files
+        if (currentFiles.size == compactedFiles.size &&
+            currentFiles.zip(compactedFiles).all { (current, compacted) ->
+                current.filePath == compacted.filePath &&
+                    fileComparisonKey(current.filePath) == fileComparisonKey(compacted.filePath)
+            }
+        ) {
+            return
+        }
+
+        FloatBarDiagnosticLog.warn(
+            category = "STATE",
+            message = "compacting drawing file entries from=${currentFiles.size} to=${compactedFiles.size}"
+        )
+        updateState { it.copy(files = compactedFiles) }
+    }
+
+    fun getRecentColors(): MutableList<Int> = state.recentColors.toMutableList()
 
     fun setRecentColors(colors: List<Int>) {
-        state.recentColors = colors.toMutableList()
+        updateState { it.copy(recentColors = colors.toMutableList()) }
     }
 
     fun getSelectedColorRgb(): Int = state.selectedColorRgb
 
     fun setSelectedColorRgb(rgb: Int) {
-        state.selectedColorRgb = rgb
+        updateState { it.copy(selectedColorRgb = rgb) }
     }
 
     fun isGridEnabled(): Boolean = state.gridEnabled
 
     fun setGridEnabled(enabled: Boolean) {
-        state.gridEnabled = enabled
+        updateState { it.copy(gridEnabled = enabled) }
     }
 
     fun isOverlayEnabled(): Boolean = state.overlayEnabled
 
     fun setOverlayEnabled(enabled: Boolean) {
-        state.overlayEnabled = enabled
+        updateState { it.copy(overlayEnabled = enabled) }
+    }
+
+    fun isInteractionPassThroughEnabled(): Boolean = state.interactionPassThroughEnabled
+
+    fun setInteractionPassThroughEnabled(enabled: Boolean) {
+        updateState { it.copy(interactionPassThroughEnabled = enabled) }
     }
 
     fun isFloatingBarVisible(): Boolean = state.floatingBarVisible
 
     fun setFloatingBarVisible(visible: Boolean) {
-        state.floatingBarVisible = visible
+        updateState { it.copy(floatingBarVisible = visible) }
     }
 
     fun getSelectedToolMode(): FloatBarToolMode {
@@ -124,7 +172,7 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
     }
 
     fun setSelectedToolMode(toolMode: FloatBarToolMode) {
-        state.selectedToolMode = toolMode.name
+        updateState { it.copy(selectedToolMode = toolMode.name) }
     }
 
     fun getSelectedShapeKind(): ShapeKind {
@@ -133,7 +181,38 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
     }
 
     fun setSelectedShapeKind(shapeKind: ShapeKind) {
-        state.selectedShapeKind = shapeKind.name
+        updateState { it.copy(selectedShapeKind = shapeKind.name) }
+    }
+
+    fun getSelectedDrawingShapeKind(): ShapeKind {
+        return ShapeKind.entries.firstOrNull { it.name == state.selectedDrawingShapeKind }
+            ?.takeUnless(::isTextOrBalloonShape)
+            ?: getSelectedShapeKind().takeUnless(::isTextOrBalloonShape)
+            ?: ShapeKind.RECTANGLE
+    }
+
+    fun setSelectedDrawingShapeKind(shapeKind: ShapeKind) {
+        if (isTextOrBalloonShape(shapeKind)) return
+        updateState { it.copy(selectedDrawingShapeKind = shapeKind.name) }
+    }
+
+    fun getSelectedTextStyle(): BalloonTextStyle {
+        return parseBalloonTextStyle(state.selectedTextStyle)
+            ?: parseBalloonTextStyle(state.selectedBalloonTextStyle)
+            ?: BalloonTextStyle.SOLID
+    }
+
+    fun setSelectedTextStyle(style: BalloonTextStyle) {
+        updateState { it.copy(selectedTextStyle = style.name) }
+    }
+
+    fun getSelectedBalloonTextStyle(): BalloonTextStyle {
+        return parseBalloonTextStyle(state.selectedBalloonTextStyle)
+            ?: BalloonTextStyle.SOLID
+    }
+
+    fun setSelectedBalloonTextStyle(style: BalloonTextStyle) {
+        updateState { it.copy(selectedBalloonTextStyle = style.name) }
     }
 
     fun getFloatingBarLocation(): Pair<Int, Int>? {
@@ -147,7 +226,88 @@ class FloatBarDrawingStateService : PersistentStateComponent<DrawingState> {
     }
 
     fun setFloatingBarLocation(x: Int, y: Int) {
-        state.floatingBarX = x
-        state.floatingBarY = y
+        updateState { it.copy(floatingBarX = x, floatingBarY = y) }
     }
+
+    private fun compactFiles(files: List<SavedFileDrawing>): MutableList<SavedFileDrawing> {
+        val compactedByKey = linkedMapOf<String, SavedFileDrawing>()
+        for (file in files) {
+            val key = fileComparisonKey(file.filePath)
+            if (key.isEmpty()) continue
+            compactedByKey[key] = file.deepCopy().copy(filePath = stableStoragePath(file.filePath))
+        }
+        return compactedByKey.values.toMutableList()
+    }
+
+    private fun stableStoragePath(filePath: String): String {
+        val trimmed = filePath.trim()
+        if (trimmed.isEmpty()) return ""
+
+        val expandedPath = expandProjectMacro(trimmed)
+        val normalizedPath = normalizePathText(expandedPath)
+        val projectBasePath = project.basePath?.let(::normalizePathText) ?: return normalizedPath
+        val normalizedPathKey = normalizeCase(normalizedPath)
+        val projectBasePathKey = normalizeCase(projectBasePath)
+
+        return when {
+            normalizedPathKey == projectBasePathKey -> PROJECT_DIR_MACRO
+            normalizedPathKey.startsWith("$projectBasePathKey/") -> {
+                val relativePath = normalizedPath.substring(projectBasePath.length).trimStart('/')
+                "$PROJECT_DIR_MACRO/$relativePath"
+            }
+            else -> normalizedPath
+        }
+    }
+
+    private fun fileComparisonKey(filePath: String): String {
+        return normalizeCase(stableStoragePath(filePath))
+    }
+
+    private fun expandProjectMacro(filePath: String): String {
+        val projectBasePath = project.basePath?.let(::normalizePathText) ?: return filePath
+        val normalizedInput = filePath.replace('\\', '/')
+        return when {
+            normalizedInput.equals(PROJECT_DIR_MACRO, ignoreCase = SystemInfo.isWindows) -> projectBasePath
+            normalizedInput.startsWith("$PROJECT_DIR_MACRO/", ignoreCase = SystemInfo.isWindows) ->
+                projectBasePath + normalizedInput.substring(PROJECT_DIR_MACRO.length)
+            else -> filePath
+        }
+    }
+
+    private fun normalizePathText(filePath: String): String {
+        val withForwardSlashes = filePath.trim().replace('\\', '/')
+        val normalized = runCatching {
+            Paths.get(withForwardSlashes).normalize().toString().replace('\\', '/')
+        }.getOrElse {
+            withForwardSlashes
+        }
+        return normalized.trimEnd('/')
+    }
+
+    private fun normalizeCase(value: String): String {
+        return if (SystemInfo.isWindows) value.lowercase(Locale.ROOT) else value
+    }
+
+    private fun isTextOrBalloonShape(shapeKind: ShapeKind): Boolean {
+        return shapeKind == ShapeKind.TEXT || shapeKind == ShapeKind.BALLOON
+    }
+
+    private fun parseBalloonTextStyle(value: String): BalloonTextStyle? {
+        return BalloonTextStyle.entries.firstOrNull { it.name == value }
+    }
+
+    private fun SavedFileDrawing.deepCopy(): SavedFileDrawing = SavedFileDrawing(
+        filePath = filePath,
+        strokes = strokes.map { it.deepCopy() }.toMutableList()
+    )
+
+    private fun SavedStroke.deepCopy(): SavedStroke = SavedStroke(
+        color = color,
+        width = width,
+        points = points.map { it.copy() }.toMutableList(),
+        filled = filled,
+        kind = kind,
+        objectGroupId = objectGroupId,
+        rigidObjectAnchor = rigidObjectAnchor
+    )
 }

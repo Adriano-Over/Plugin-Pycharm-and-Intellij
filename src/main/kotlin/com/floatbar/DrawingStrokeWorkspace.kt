@@ -83,10 +83,13 @@ class DrawingStrokeWorkspace(
         val cache = currentStrokeGeometries()
         val currentFoldLayoutSignature = coordinateMapper.currentFoldLayoutSignature()
         val cached = cache[stroke.id]
-        if (cached != null && cached.foldLayoutSignature == currentFoldLayoutSignature) return cached
+        if (cached != null && cached.foldLayoutSignature == currentFoldLayoutSignature) {
+            return cached
+        }
 
         val built = buildStrokeGeometryContent(stroke) ?: return null
         cache[stroke.id] = built
         return built
     }
 }
+

@@ -7,11 +7,11 @@ import java.awt.Point
 import java.awt.Polygon
 import java.awt.Rectangle
 import java.awt.geom.Path2D
+import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.abs
-import kotlin.math.hypot
 
 class DrawingStrokeRenderer(
     private val canvasPadding: Int,
@@ -63,6 +63,12 @@ class DrawingStrokeRenderer(
         toContentPoint: (AnchorPoint) -> Point?
     ): StrokeGeometryContent? {
         val contentPoints = stroke.points.mapNotNull(toContentPoint)
+        if (contentPoints.size != stroke.points.size) {
+            FloatBarDiagnosticLog.warn("RENDERER", "mappedPointDrop ${FloatBarDiagnosticLog.strokeSummary(stroke)} mapped=${contentPoints.size}")
+        }
+        FloatBarDiagnosticLog.sample("rendererBuild-${stroke.id}", 700, "RENDERER") {
+            "rendererBuild ${FloatBarDiagnosticLog.strokeSummary(stroke)} ${FloatBarDiagnosticLog.pointSummary(contentPoints)}"
+        }
         if (contentPoints.isEmpty()) return null
 
         val boundsPadding = max(4, ceil(stroke.width.toDouble() / 2.0).toInt() + 2)
@@ -79,7 +85,7 @@ class DrawingStrokeRenderer(
             val path = if (stroke.kind == null) {
                 buildCornerPreservingFreehandPath(contentPoints)
             } else {
-                buildPolylinePath(contentPoints)
+                buildShapePath(contentPoints, stroke.kind)
             }
             StrokeGeometryContent(
                 path = path,
@@ -103,6 +109,9 @@ class DrawingStrokeRenderer(
         }
 
         if (visibleContentClip != null && !geometry.bounds.intersects(visibleContentClip)) {
+            FloatBarDiagnosticLog.sample("paintSkipClip-${stroke.id}", 700, "RENDERER") {
+                "paintSkipClip ${FloatBarDiagnosticLog.strokeSummary(stroke)} ${FloatBarDiagnosticLog.geometrySummary(geometry)} clip=${FloatBarDiagnosticLog.rectSummary(visibleContentClip)}"
+            }
             return
         }
 
@@ -141,6 +150,170 @@ class DrawingStrokeRenderer(
         geometry.path?.let { g.draw(it) }
     }
 
+    private fun buildShapePath(points: List<Point>, kind: ShapeKind?): Path2D.Float {
+        return when (kind) {
+            ShapeKind.PREDEFINED_PROCESS -> buildPredefinedProcessPath(rawBounds(points))
+            ShapeKind.DOCUMENT -> buildDocumentPath(rawBounds(points))
+            ShapeKind.MULTIPLE_DOCUMENTS -> buildMultipleDocumentsPath(rawBounds(points))
+            ShapeKind.STORED_DATA -> buildStoredDataPath(rawBounds(points))
+            else -> buildPolylinePath(points, kind)
+        }
+    }
+
+    private fun rawBounds(points: List<Point>): Rectangle {
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+
+        for (point in points) {
+            minX = min(minX, point.x)
+            minY = min(minY, point.y)
+            maxX = max(maxX, point.x)
+            maxY = max(maxY, point.y)
+        }
+
+        return if (minX == Int.MAX_VALUE) {
+            Rectangle()
+        } else {
+            Rectangle(minX, minY, (maxX - minX).coerceAtLeast(1), (maxY - minY).coerceAtLeast(1))
+        }
+    }
+
+    private fun buildPredefinedProcessPath(bounds: Rectangle): Path2D.Float {
+        val path = Path2D.Float()
+        val radius = min(14.0, max(5.0, min(bounds.width, bounds.height) / 16.0))
+        appendRoundedRect(path, bounds.x.toDouble(), bounds.y.toDouble(), bounds.maxX, bounds.maxY, radius)
+
+        val barInset = max(radius + 5.0, bounds.width / 10.0).coerceAtMost(bounds.width / 3.0)
+        val top = bounds.y + radius / 2.0
+        val bottom = bounds.maxY - radius / 2.0
+        val leftBarX = bounds.x + barInset
+        val rightBarX = bounds.maxX - barInset
+
+        path.moveTo(leftBarX, top)
+        path.lineTo(leftBarX, bottom)
+        path.moveTo(rightBarX, top)
+        path.lineTo(rightBarX, bottom)
+
+        return path
+    }
+
+    private fun buildDocumentPath(bounds: Rectangle): Path2D.Float {
+        return Path2D.Float().also { path ->
+            appendDocument(path, bounds.x.toDouble(), bounds.y.toDouble(), bounds.maxX, bounds.maxY)
+        }
+    }
+
+    private fun buildMultipleDocumentsPath(bounds: Rectangle): Path2D.Float {
+        val path = Path2D.Float()
+        val offset = max(6.0, min(bounds.width, bounds.height) / 10.0)
+            .coerceAtMost(max(1.0, min(bounds.width, bounds.height) / 4.0))
+
+        appendDocument(
+            path,
+            bounds.x.toDouble(),
+            bounds.y.toDouble(),
+            bounds.maxX - offset * 2.0,
+            bounds.maxY - offset * 2.0
+        )
+        appendDocument(
+            path,
+            bounds.x + offset,
+            bounds.y + offset,
+            bounds.maxX - offset,
+            bounds.maxY - offset
+        )
+        appendDocument(
+            path,
+            bounds.x + offset * 2.0,
+            bounds.y + offset * 2.0,
+            bounds.maxX,
+            bounds.maxY
+        )
+
+        return path
+    }
+
+    private fun buildStoredDataPath(bounds: Rectangle): Path2D.Float {
+        val path = Path2D.Float()
+        val curve = max(10.0, bounds.width / 6.0)
+        val left = bounds.x.toDouble()
+        val right = bounds.maxX
+        val top = bounds.y.toDouble()
+        val bottom = bounds.maxY
+        val height = bounds.height.toDouble()
+
+        path.moveTo(left + curve, top)
+        path.lineTo(right, top)
+        path.curveTo(
+            right - curve,
+            top + height / 3.0,
+            right - curve,
+            bottom - height / 3.0,
+            right,
+            bottom
+        )
+        path.lineTo(left + curve, bottom)
+        path.curveTo(
+            left - curve / 2.0,
+            bottom - height / 3.0,
+            left - curve / 2.0,
+            top + height / 3.0,
+            left + curve,
+            top
+        )
+        path.closePath()
+
+        return path
+    }
+
+    private fun appendRoundedRect(path: Path2D.Float, left: Double, top: Double, right: Double, bottom: Double, radius: Double) {
+        val safeRadius = min(radius, min((right - left) / 2.0, (bottom - top) / 2.0)).coerceAtLeast(1.0)
+
+        path.moveTo(left + safeRadius, top)
+        path.lineTo(right - safeRadius, top)
+        path.quadTo(right, top, right, top + safeRadius)
+        path.lineTo(right, bottom - safeRadius)
+        path.quadTo(right, bottom, right - safeRadius, bottom)
+        path.lineTo(left + safeRadius, bottom)
+        path.quadTo(left, bottom, left, bottom - safeRadius)
+        path.lineTo(left, top + safeRadius)
+        path.quadTo(left, top, left + safeRadius, top)
+        path.closePath()
+    }
+
+    private fun appendDocument(path: Path2D.Float, left: Double, top: Double, right: Double, bottom: Double) {
+        if (right <= left || bottom <= top) return
+
+        val width = right - left
+        val height = bottom - top
+        val wave = max(8.0, height / 6.0).coerceAtMost(height / 3.0)
+        val waveTopY = bottom - wave
+        val centerX = left + width / 2.0
+
+        path.moveTo(left, top)
+        path.lineTo(right, top)
+        path.lineTo(right, waveTopY)
+        path.curveTo(
+            right - width / 4.0,
+            bottom,
+            centerX + width / 6.0,
+            bottom,
+            centerX,
+            bottom
+        )
+        path.curveTo(
+            centerX - width / 6.0,
+            bottom,
+            left + width / 4.0,
+            waveTopY - wave / 2.0,
+            left,
+            waveTopY
+        )
+        path.closePath()
+    }
+
     private fun computeGeometryBounds(points: List<Point>, padding: Int): Rectangle {
         var minX = Int.MAX_VALUE
         var minY = Int.MAX_VALUE
@@ -166,11 +339,21 @@ class DrawingStrokeRenderer(
         )
     }
 
-    private fun buildPolylinePath(points: List<Point>): Path2D.Float {
+    private fun buildPolylinePath(points: List<Point>, kind: ShapeKind?): Path2D.Float {
         val path = Path2D.Float()
-        path.moveTo(points.first().x.toDouble(), points.first().y.toDouble())
-        for (point in points.drop(1)) {
+        val closedOutline = kind?.isClosedOutline() == true
+        val normalizedPoints = if (closedOutline && points.size >= 2 && points.first() == points.last()) {
+            points.dropLast(1)
+        } else {
+            points
+        }
+
+        path.moveTo(normalizedPoints.first().x.toDouble(), normalizedPoints.first().y.toDouble())
+        for (point in normalizedPoints.drop(1)) {
             path.lineTo(point.x.toDouble(), point.y.toDouble())
+        }
+        if (closedOutline) {
+            path.closePath()
         }
         return path
     }

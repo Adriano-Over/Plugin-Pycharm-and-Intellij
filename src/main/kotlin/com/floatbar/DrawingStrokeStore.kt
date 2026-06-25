@@ -69,7 +69,9 @@ class DrawingStrokeStore(
     ): MutableList<StrokePath> {
         if (filePath.isNullOrEmpty() || document == null) return mutableListOf()
 
-        val loaded = stateService.getStrokes(filePath).map { saved ->
+        val savedFromState = stateService.getStrokes(filePath)
+        FloatBarDiagnosticLog.info("STORE", "loadPersistedStrokes file=$filePath saved=${savedFromState.size}")
+        val loaded = savedFromState.map { saved ->
             StrokePath(
                 color = Color(saved.color, true),
                 width = saved.width,
@@ -106,16 +108,23 @@ class DrawingStrokeStore(
                     anchor
                 }.toMutableList(),
                 filled = saved.filled,
-                kind = saved.kind?.let { runCatching { ShapeKind.valueOf(it) }.getOrNull() }
+                kind = saved.kind?.let { runCatching { ShapeKind.valueOf(it) }.getOrNull() },
+                objectGroupId = saved.objectGroupId,
+                rigidObjectAnchor = saved.rigidObjectAnchor
             )
         }.toMutableList()
 
         strokesByDocument[document] = loaded
+        FloatBarDiagnosticLog.info("STORE", "loadPersistedStrokes mapped=${loaded.size} file=$filePath")
         return loaded
     }
 
     fun persistStrokes(filePath: String?, strokes: List<StrokePath>) {
-        if (filePath.isNullOrEmpty()) return
+        if (filePath.isNullOrEmpty()) {
+            FloatBarDiagnosticLog.warn("STORE", "persistStrokes skipped empty filePath strokes=${strokes.size}")
+            return
+        }
+        FloatBarDiagnosticLog.info("STORE", "persistStrokes file=$filePath strokes=${strokes.size} first=${FloatBarDiagnosticLog.strokeSummary(strokes.firstOrNull())}")
 
         val saved = strokes.map { stroke ->
             SavedStroke(
@@ -136,9 +145,12 @@ class DrawingStrokeStore(
                     )
                 }.toMutableList(),
                 filled = stroke.filled,
-                kind = stroke.kind?.name
+                kind = stroke.kind?.name,
+                objectGroupId = stroke.objectGroupId,
+                rigidObjectAnchor = stroke.rigidObjectAnchor
             )
         }
+        FloatBarDiagnosticLog.info("STORE", "persistStrokes savedPayload=${saved.size} pointCounts=${saved.joinToString(",") { it.points.size.toString() }}")
         stateService.setStrokes(filePath, saved)
     }
 }
