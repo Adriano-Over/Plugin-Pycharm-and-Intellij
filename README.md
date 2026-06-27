@@ -1,6 +1,6 @@
-# FloatBar
+# Drawing
 
-FloatBar is a personal JetBrains IDE plugin for adding a floating drawing and annotation toolbar inside IntelliJ-based IDEs such as IntelliJ IDEA and PyCharm.
+Drawing is a personal JetBrains IDE plugin for adding a floating drawing and annotation toolbar inside IntelliJ-based IDEs such as IntelliJ IDEA and PyCharm.
 
 It is designed for quick visual notes, sketches, explanations, and temporary annotations directly over the editor.
 
@@ -24,7 +24,7 @@ It is designed for quick visual notes, sketches, explanations, and temporary ann
 ## Project structure
 
 ```text
-src/main/kotlin/com/floatbar/
+src/main/kotlin/com/drawing/
 src/main/resources/META-INF/plugin.xml
 build.gradle.kts
 gradle.properties
@@ -34,8 +34,8 @@ settings.gradle.kts
 Important areas:
 
 ```text
-FloatingBar.kt                 Floating toolbar UI
-FloatBarService.kt             Main plugin/window lifecycle service
+DrawingToolbarPanel.kt                 Drawing toolbar UI
+DrawingService.kt             Main plugin/window lifecycle service
 EditorOverlayController.kt     Editor overlay visibility/control
 DrawingCanvasPanel.kt          Drawing overlay panel
 DrawingInputController.kt      Mouse/tool input handling
@@ -43,7 +43,7 @@ DrawingCanvasPainter.kt        Canvas rendering
 FillGeometryEngine.kt          Fill behavior
 EraseGeometryEngine.kt         Erase behavior
 PaintGeometryEngine.kt         Paint geometry behavior
-FloatBarStatusBarWidget.kt     Bottom status bar widget
+DrawingStatusBarWidget.kt     Bottom status bar widget
 RecentColorStore.kt            Recent color memory
 ```
 
@@ -97,7 +97,7 @@ Fill and erase behavior should be tested together because changes to fill geomet
 
 After a change, run the plugin and check:
 
-- FloatBar opens and closes from the status bar widget
+- Drawing opens and closes from the status bar widget
 - Overlay button switches between ON and OFF correctly
 - Draw mode works
 - Erase mode works and shows the eraser preview

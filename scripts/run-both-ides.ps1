@@ -51,8 +51,8 @@ Write-Host 'Close this window after closing the IDE sandbox.' -ForegroundColor Y
         -WorkingDirectory $ProjectRoot
 }
 
-Start-IdeTask -Title "FloatBar IntelliJ IDEA sandbox" -TaskName "runIdeIntellij"
+Start-IdeTask -Title "Drawing IntelliJ IDEA sandbox" -TaskName "runIdeIntellij"
 Start-Sleep -Seconds 2
-Start-IdeTask -Title "FloatBar PyCharm sandbox" -TaskName "runIdePyCharm"
+Start-IdeTask -Title "Drawing PyCharm sandbox" -TaskName "runIdePyCharm"
 
 Write-Host "Started IntelliJ IDEA and PyCharm sandbox launchers."

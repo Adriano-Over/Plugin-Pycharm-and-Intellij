@@ -1,5 +1,5 @@
 <idea-plugin>
-    <id>com.floatbar</id>
+    <id>com.drawing</id>
     <name>Drawing</name>
     <vendor url="https://github.com/Adriano-Over/Plugin-Pycharm-and-Intellij">Adriano-Over</vendor>
 
@@ -26,9 +26,9 @@
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow
                 id="Drawing"
-                icon="/icons/floatbar-pencil.svg"
+                icon="/icons/drawing-pencil.svg"
                 anchor="right"
-                factoryClass="com.floatbar.FloatingBarToolWindowFactory"
+                factoryClass="com.drawing.DrawingToolWindowFactory"
                 canCloseContents="false"
                 secondary="true"/>
     </extensions>

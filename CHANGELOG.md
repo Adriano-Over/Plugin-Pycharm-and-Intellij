@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to FloatBar will be documented in this file.
+All notable changes to Drawing will be documented in this file.
 
 This project follows a simple changelog format focused on practical development history rather than formal release management.
 
@@ -13,7 +13,7 @@ This project follows a simple changelog format focused on practical development 
 - Added a compact active tool label in the floating toolbar.
 - Added clearer toolbar tooltips for the main actions and color controls.
 - Added visible Overlay ON/OFF state in the floating toolbar.
-- Added clearer FloatBar ON/OFF state in the IDE status bar widget.
+- Added clearer Drawing ON/OFF state in the IDE status bar widget.
 - Added a confirmation dialog before clearing drawings from the current editor document.
 - Added clearer Undo and Redo availability states.
 - Added visible Grid ON/OFF state in the floating toolbar.
@@ -28,9 +28,9 @@ This project follows a simple changelog format focused on practical development 
 ### Changed
 
 - Polished plugin metadata in `plugin.xml`.
-- Standardized the visible plugin name as `FloatBar`.
+- Standardized the visible plugin name as `Drawing`.
 - Improved plugin description and basic change notes.
-- Updated tool window naming to `FloatBar`.
+- Updated tool window naming to `Drawing`.
 - Updated toggle action description.
 
 ### Preserved
@@ -54,7 +54,7 @@ The fill and erase behavior is currently considered stable. Avoid redesigning th
 After each change, test at least:
 
 1. Start the plugin with `./gradlew runIde`.
-2. Toggle FloatBar ON/OFF.
+2. Toggle Drawing ON/OFF.
 3. Toggle the editor overlay ON/OFF.
 4. Draw a stroke.
 5. Erase part of a stroke.

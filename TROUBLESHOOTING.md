@@ -1,6 +1,6 @@
-# Troubleshooting FloatBar
+# Troubleshooting Drawing
 
-This guide covers common local development problems for the FloatBar IntelliJ/PyCharm plugin.
+This guide covers common local development problems for the Drawing IntelliJ/PyCharm plugin.
 
 ## Gradle cannot download dependencies
 
@@ -54,7 +54,7 @@ src/main/resources/META-INF/plugin.xml
 Also check the implementation file:
 
 ```text
-src/main/kotlin/com/floatbar/FloatBarToolWindowFactory.kt
+src/main/kotlin/com/drawing/DrawingToolWindowFactory.kt
 ```
 
 ## Status bar widget does not appear
@@ -62,26 +62,26 @@ src/main/kotlin/com/floatbar/FloatBarToolWindowFactory.kt
 Check:
 
 ```text
-src/main/kotlin/com/floatbar/FloatBarStatusBarWidget.kt
-src/main/kotlin/com/floatbar/FloatBarStatusBarWidgetFactory.kt
+src/main/kotlin/com/drawing/DrawingStatusBarWidget.kt
+src/main/kotlin/com/drawing/DrawingStatusBarWidgetFactory.kt
 src/main/resources/META-INF/plugin.xml
 ```
 
 If the widget was recently changed, restart the sandbox IDE from `runIde` rather than relying on hot reload.
 
-## FloatBar opens but drawing overlay is missing
+## Drawing opens but drawing overlay is missing
 
 Check:
 
 ```text
-src/main/kotlin/com/floatbar/FloatBarService.kt
-src/main/kotlin/com/floatbar/EditorOverlayController.kt
-src/main/kotlin/com/floatbar/DrawingCanvasPanel.kt
+src/main/kotlin/com/drawing/DrawingService.kt
+src/main/kotlin/com/drawing/EditorOverlayController.kt
+src/main/kotlin/com/drawing/DrawingCanvasPanel.kt
 ```
 
 Things to verify:
 
-- FloatBar is visible.
+- Drawing is visible.
 - Overlay button says `Overlay ON`.
 - An editor document is open.
 - The drawing canvas is attached to the active editor.
@@ -93,9 +93,9 @@ Do not start by changing the UI preview code.
 Check whether these files were modified recently:
 
 ```text
-src/main/kotlin/com/floatbar/EraseGeometryEngine.kt
-src/main/kotlin/com/floatbar/FillGeometryEngine.kt
-src/main/kotlin/com/floatbar/PaintGeometryEngine.kt
+src/main/kotlin/com/drawing/EraseGeometryEngine.kt
+src/main/kotlin/com/drawing/FillGeometryEngine.kt
+src/main/kotlin/com/drawing/PaintGeometryEngine.kt
 ```
 
 The fill/erase behavior is sensitive. Prefer reverting suspicious geometry changes before redesigning the erase model.
@@ -118,8 +118,8 @@ Avoid replacing fill with large merged areas, row strips, chunks, or tiled retes
 Check:
 
 ```text
-src/main/kotlin/com/floatbar/RecentColorStore.kt
-src/main/kotlin/com/floatbar/FloatingBar.kt
+src/main/kotlin/com/drawing/RecentColorStore.kt
+src/main/kotlin/com/drawing/DrawingToolbarPanel.kt
 ```
 
 Verify that the store capacity and toolbar rendering count match. The current intended count is **6 recent colors**.
@@ -129,8 +129,8 @@ Verify that the store capacity and toolbar rendering count match. The current in
 Check:
 
 ```text
-src/main/kotlin/com/floatbar/FloatingBar.kt
-src/main/kotlin/com/floatbar/DrawingHistoryStore.kt
+src/main/kotlin/com/drawing/DrawingToolbarPanel.kt
+src/main/kotlin/com/drawing/DrawingHistoryStore.kt
 ```
 
 Verify that the toolbar refreshes button state after drawing, clearing, undo, and redo.
@@ -157,7 +157,7 @@ After any plugin change, run:
 
 Then test:
 
-1. FloatBar opens and closes.
+1. Drawing opens and closes.
 2. Overlay toggles ON/OFF correctly.
 3. Draw works.
 4. Erase works and preview follows the cursor.
@@ -167,7 +167,7 @@ Then test:
 8. Clear asks for confirmation.
 9. Grid toggles ON/OFF correctly.
 10. Recent colors update and highlight the selected color.
-11. Status bar widget toggles FloatBar correctly.
+11. Status bar widget toggles Drawing correctly.
 
 ## General rule
 

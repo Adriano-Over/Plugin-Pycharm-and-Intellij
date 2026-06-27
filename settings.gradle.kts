@@ -1,1 +1,1 @@
-rootProject.name = "floatbar-plugin"
+rootProject.name = "drawing-plugin"

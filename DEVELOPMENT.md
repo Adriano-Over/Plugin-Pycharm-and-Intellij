@@ -1,8 +1,8 @@
-# FloatBar Development Guide
+# Drawing Development Guide
 
-This guide describes the safe development workflow for the FloatBar IntelliJ/PyCharm plugin.
+This guide describes the safe development workflow for the Drawing IntelliJ/PyCharm plugin.
 
-FloatBar is currently in a stable, personal-use phase. The main goal is to keep improving the plugin with small, reversible changes while protecting the working drawing, fill, erase, and persistence behavior.
+Drawing is currently in a stable, personal-use phase. The main goal is to keep improving the plugin with small, reversible changes while protecting the working drawing, fill, erase, and persistence behavior.
 
 ## Development Principles
 
@@ -49,7 +49,7 @@ After each change, test the plugin manually in the IDE sandbox.
 
 ### Startup and visibility
 
-- FloatBar loads without startup errors.
+- Drawing loads without startup errors.
 - Status bar widget appears.
 - Floating bar can be shown and hidden.
 - Overlay button correctly shows `Overlay ON` and `Overlay OFF`.
@@ -90,7 +90,7 @@ After each change, test the plugin manually in the IDE sandbox.
 Use small commits with clear messages, for example:
 
 ```bash
-git add src/main/kotlin/com/floatbar/FloatingBar.kt
+git add src/main/kotlin/com/drawing/DrawingToolbarPanel.kt
 git commit -m "Polish toolbar color status"
 ```
 
@@ -105,8 +105,8 @@ git commit -m "Add project documentation"
 
 These files are usually safer places for toolbar/status/cursor polish:
 
-- `FloatingBar.kt`
-- `FloatBarStatusBarWidget.kt`
+- `DrawingToolbarPanel.kt`
+- `DrawingStatusBarWidget.kt`
 - `DrawingCanvasPanel.kt`
 - `DrawingCanvasPainter.kt`
 - `DrawingInputController.kt`
