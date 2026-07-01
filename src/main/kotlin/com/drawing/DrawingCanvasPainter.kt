@@ -39,8 +39,10 @@ class DrawingCanvasPainter(
         val stats = PaintPerformanceStats()
         val currentEditor = editorProvider() ?: return
         val g = graphics as? Graphics2D ?: return
+        DrawingPerformanceDiagnostics.beginPaint(stats)
 
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        try {
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
         val clip = g.clipBounds ?: Rectangle(0, 0, canvas.width, canvas.height)
         val lineHeight = currentEditor.lineHeight.takeIf { it > 0 } ?: 16
@@ -123,8 +125,11 @@ class DrawingCanvasPainter(
 
         paintSelectionMarquee(g)
         paintToolPreview(g)
-        stats.paintMs = (System.nanoTime() - paintStartedAt) / 1_000_000L
-        DrawingPerformanceDiagnostics.logSlowPaint(stats)
+        } finally {
+            stats.paintMs = (System.nanoTime() - paintStartedAt) / 1_000_000L
+            DrawingPerformanceDiagnostics.logSlowPaint(stats)
+            DrawingPerformanceDiagnostics.endPaint()
+        }
     }
 
 
@@ -133,8 +138,10 @@ class DrawingCanvasPainter(
         val stats = PaintPerformanceStats()
         val currentEditor = editorProvider() ?: return
         val g = graphics as? Graphics2D ?: return
+        DrawingPerformanceDiagnostics.beginPaint(stats)
 
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        try {
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
 
         val clip = g.clipBounds ?: currentEditor.scrollingModel.visibleArea
         val lineHeight = currentEditor.lineHeight.takeIf { it > 0 } ?: 16
@@ -201,8 +208,11 @@ class DrawingCanvasPainter(
 
         paintSelectionMarqueeInEditorContent(g, currentEditor)
         paintToolPreviewInEditorContent(g, currentEditor)
-        stats.paintMs = (System.nanoTime() - paintStartedAt) / 1_000_000L
-        DrawingPerformanceDiagnostics.logSlowPaint(stats)
+        } finally {
+            stats.paintMs = (System.nanoTime() - paintStartedAt) / 1_000_000L
+            DrawingPerformanceDiagnostics.logSlowPaint(stats)
+            DrawingPerformanceDiagnostics.endPaint()
+        }
     }
 
     private fun paintSelectionMarquee(g: Graphics2D) {
@@ -289,7 +299,7 @@ class DrawingCanvasPainter(
     ) {
         if (collapsedRegions.isEmpty()) return
 
-        val hiddenRegions = DrawingViewportTools.collapsedFoldMarkersFor(currentStrokesProvider(), collapsedRegions)
+        val hiddenRegions = strokeWorkspace.collapsedFoldMarkersFor(currentStrokesProvider(), collapsedRegions)
         if (hiddenRegions.isEmpty()) return
 
         // FIX: don't call g.create() here — g is already the correctly translated
@@ -409,23 +419,23 @@ class DrawingCanvasPainter(
         val selectedAnnotationIds = selectedAnnotationIdsProvider()
         if (selectedIds.isEmpty() && selectedRasterFillIds.isEmpty() && selectedAnnotationIds.isEmpty()) return
 
-        val strokeBounds = currentStrokesProvider()
+        val strokeBounds = selectedIds
             .asSequence()
-            .filter { it.id in selectedIds }
+            .mapNotNull(strokeWorkspace::strokeById)
             .mapNotNull { strokeWorkspace.getOrBuildStrokeGeometryContent(it)?.bounds }
             .fold(null as Rectangle?) { union, bounds ->
                 if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
             }
-        val rasterBounds = currentRasterFillsProvider()
+        val rasterBounds = selectedRasterFillIds
             .asSequence()
-            .filter { it.id in selectedRasterFillIds }
+            .mapNotNull(strokeWorkspace::rasterFillById)
             .mapNotNull { strokeWorkspace.rasterFillContentBounds(it) }
             .fold(null as Rectangle?) { union, bounds ->
                 if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
             }
-        val annotationBounds = currentAnnotationsProvider()
+        val annotationBounds = selectedAnnotationIds
             .asSequence()
-            .filter { it.id in selectedAnnotationIds }
+            .mapNotNull(strokeWorkspace::annotationById)
             .mapNotNull { strokeWorkspace.annotationContentBounds(it) }
             .fold(null as Rectangle?) { union, bounds ->
                 if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
@@ -572,7 +582,13 @@ class DrawingCanvasPainter(
     ) {
         if (stroke.annotationText != null) {
             // Legacy semantic text strokes are migrated to AnnotationPath on load.
-            // Keeping them out of paint avoids the old all-stroke group scan.
+            // If migration failed, render only this representative without group scans.
+            val geometry = if (preview) {
+                strokeWorkspace.buildStrokeGeometryContent(stroke)
+            } else {
+                strokeWorkspace.getOrBuildStrokeGeometryContent(stroke)
+            } ?: return
+            paintSemanticAnnotation(g, stroke, geometry, visibleContentClip)
             return
         }
 
@@ -645,8 +661,7 @@ class DrawingCanvasPainter(
 
     private fun resolveSemanticAnnotationBounds(stroke: StrokePath, fallbackGeometry: StrokeGeometryContent): Rectangle? {
         val sizeBounds = stroke.annotationBounds?.takeIf { it.width > 0 && it.height > 0 }
-        val anchorBounds = semanticGroupGeometryBounds(stroke)
-            ?: fallbackGeometry.bounds.takeIf { it.width > 0 && it.height > 0 }?.let { Rectangle(it) }
+        val anchorBounds = fallbackGeometry.bounds.takeIf { it.width > 0 && it.height > 0 }?.let { Rectangle(it) }
             ?: sizeBounds?.let { Rectangle(it) }
             ?: return null
         val width = sizeBounds?.width ?: anchorBounds.width
@@ -654,19 +669,6 @@ class DrawingCanvasPainter(
         val x = anchorBounds.x + (anchorBounds.width - width) / 2
         val y = anchorBounds.y + (anchorBounds.height - height) / 2
         return Rectangle(x, y, width, height)
-    }
-
-    private fun semanticGroupGeometryBounds(stroke: StrokePath): Rectangle? {
-        val semanticKey = annotationGroupKey(stroke)
-        var union: Rectangle? = null
-        for (candidate in currentStrokesProvider()) {
-            if (candidate.annotationText == null || annotationGroupKey(candidate) != semanticKey) {
-                continue
-            }
-            val bounds = strokeWorkspace.getOrBuildStrokeGeometryContent(candidate)?.bounds ?: continue
-            union = union?.apply { add(bounds) } ?: Rectangle(bounds)
-        }
-        return union
     }
 
     private fun chooseSemanticFont(g: Graphics2D, text: String, width: Int, height: Int): Font {

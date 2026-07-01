@@ -28,7 +28,7 @@ import javax.swing.JPanel
 
 class DrawingCanvasPainterSemanticTextTest {
     @Test
-    fun `legacy semantic text strokes are skipped by the hot paint path`() {
+    fun `legacy semantic text fallback stays visible without normal stroke painting`() {
         val canvas = JPanel().apply {
             setSize(320, 180)
         }
@@ -88,11 +88,10 @@ class DrawingCanvasPainterSemanticTextTest {
 
         val paintCalls = renderer.paintStrokeCalls
         assertEquals(0, paintCalls, "Legacy text strokes should not go through the normal stroke renderer")
-        assertEquals(
-            0,
-            paintedPixelBounds(image).drawnPixels,
-            "Legacy text strokes should be migrated to AnnotationPath instead of rendered during paint"
-        )
+        val firstPaintBounds = paintedPixelBounds(image)
+        assertEquals(true, firstPaintBounds.drawnPixels > 0, "Legacy text fallback should stay visible if migration fails")
+        assertEquals(true, firstPaintBounds.width >= 40, "Legacy text fallback should not collapse horizontally")
+        assertEquals(true, firstPaintBounds.height >= 12, "Legacy text fallback should not collapse vertically")
     }
 
     private data class PixelBounds(

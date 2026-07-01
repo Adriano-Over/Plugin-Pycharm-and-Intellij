@@ -25,6 +25,7 @@ class DrawingStrokeWorkspace(
     private val annotationImageCache = AnnotationImageCache()
     private val rasterFillBoundsCache = mutableMapOf<Long, Pair<ObjectBoundsCacheKey, Rectangle>>()
     private val annotationBoundsCache = mutableMapOf<Long, Pair<ObjectBoundsCacheKey, Rectangle>>()
+    private var collapsedFoldMarkersCache: Pair<CollapsedFoldMarkersCacheKey, List<CollapsedFoldRegionSnapshot>>? = null
 
     fun currentStrokes(): MutableList<StrokePath> {
         return strokeStore.currentStrokes(currentDocument())
@@ -48,10 +49,12 @@ class DrawingStrokeWorkspace(
 
     fun setStrokes(document: Document, strokes: MutableList<StrokePath>) {
         strokeStore.setStrokes(document, strokes)
+        invalidateStrokeCaches()
     }
 
     fun setRasterFills(document: Document, rasterFills: MutableList<RasterFillPath>) {
         strokeStore.setRasterFills(document, rasterFills)
+        rasterFillImageCache.clear()
         rasterFillBoundsCache.clear()
     }
 
@@ -73,25 +76,41 @@ class DrawingStrokeWorkspace(
         currentStrokes().add(stroke)
         updateStrokeBounds(stroke)
         invalidateStrokeGeometry(stroke)
+        invalidateFoldMarkerCache()
     }
 
     fun addRasterFill(fill: RasterFillPath) {
         currentRasterFills().add(fill)
-        invalidateRasterFillBounds(fill.id)
+        invalidateRasterFill(fill.id)
     }
 
     fun addAnnotation(annotation: AnnotationPath) {
         currentAnnotations().add(annotation)
-        annotationImageCache.invalidate(annotation.id)
-        invalidateAnnotationBounds(annotation.id)
+        invalidateAnnotation(annotation.id)
+    }
+
+    fun strokeById(id: Long): StrokePath? {
+        return currentStrokes().firstOrNull { it.id == id }
+    }
+
+    fun rasterFillById(id: Long): RasterFillPath? {
+        return currentRasterFills().firstOrNull { it.id == id }
+    }
+
+    fun annotationById(id: Long): AnnotationPath? {
+        return currentAnnotations().firstOrNull { it.id == id }
     }
 
     fun rasterFillContentBounds(fill: RasterFillPath): Rectangle? {
         if (fill.width <= 0 || fill.height <= 0) return null
         val key = boundsCacheKey(fill.id, fill.anchor, fill.width, fill.height)
         rasterFillBoundsCache[fill.id]?.let { (cachedKey, cachedBounds) ->
-            if (cachedKey == key) return Rectangle(cachedBounds)
+            if (cachedKey == key) {
+                DrawingPerformanceDiagnostics.recordBoundsCacheHit()
+                return Rectangle(cachedBounds)
+            }
         }
+        DrawingPerformanceDiagnostics.recordBoundsCacheMiss()
         val topLeft = coordinateMapper.toContentPoint(fill.anchor.copy()) ?: return null
         val bounds = Rectangle(topLeft.x, topLeft.y, fill.width, fill.height)
         rasterFillBoundsCache[fill.id] = key to Rectangle(bounds)
@@ -104,8 +123,12 @@ class DrawingStrokeWorkspace(
         if (annotation.width <= 0 || annotation.height <= 0) return null
         val key = boundsCacheKey(annotation.id, annotation.anchor, annotation.width, annotation.height)
         annotationBoundsCache[annotation.id]?.let { (cachedKey, cachedBounds) ->
-            if (cachedKey == key) return Rectangle(cachedBounds)
+            if (cachedKey == key) {
+                DrawingPerformanceDiagnostics.recordBoundsCacheHit()
+                return Rectangle(cachedBounds)
+            }
         }
+        DrawingPerformanceDiagnostics.recordBoundsCacheMiss()
         val topLeft = coordinateMapper.toContentPoint(annotation.anchor.copy()) ?: return null
         val bounds = Rectangle(topLeft.x, topLeft.y, annotation.width, annotation.height)
         annotationBoundsCache[annotation.id] = key to Rectangle(bounds)
@@ -117,6 +140,11 @@ class DrawingStrokeWorkspace(
     fun invalidateAnnotation(annotationId: Long) {
         annotationImageCache.invalidate(annotationId)
         invalidateAnnotationBounds(annotationId)
+    }
+
+    fun invalidateRasterFill(fillId: Long) {
+        rasterFillImageCache.invalidate(fillId)
+        invalidateRasterFillBounds(fillId)
     }
 
     fun invalidateRasterFillBounds(fillId: Long) {
@@ -132,16 +160,41 @@ class DrawingStrokeWorkspace(
         annotationBoundsCache.clear()
     }
 
+    fun collapsedFoldMarkersFor(
+        visibleStrokes: List<StrokePath>,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>
+    ): List<CollapsedFoldRegionSnapshot> {
+        if (collapsedRegions.isEmpty() || visibleStrokes.isEmpty()) return emptyList()
+        val key = CollapsedFoldMarkersCacheKey(
+            foldLayoutSignature = coordinateMapper.currentFoldLayoutSignature(),
+            strokeSignature = visibleStrokes.fold(1) { acc, stroke -> 31 * acc + stroke.id.hashCode() },
+            collapsedRegionSignature = collapsedRegions.fold(1) { acc, region ->
+                31 * acc + region.startOffset
+                    .let { 31 * it + region.endOffset }
+                    .let { 31 * it + region.placeholderPoint.x }
+                    .let { 31 * it + region.placeholderPoint.y }
+                    .let { 31 * it + region.placeholderWidth }
+            }
+        )
+        collapsedFoldMarkersCache?.let { (cachedKey, cachedMarkers) ->
+            if (cachedKey == key) return cachedMarkers
+        }
+        val markers = DrawingViewportTools.collapsedFoldMarkersFor(visibleStrokes, collapsedRegions)
+        collapsedFoldMarkersCache = key to markers
+        return markers
+    }
+
     fun visibleStrokes(
         visibleLineRange: IntRange,
         visibleContentClip: Rectangle,
         collapsedFoldRegions: List<CollapsedFoldRegionSnapshot>
     ): List<StrokePath> {
         val visible = mutableListOf<StrokePath>()
+        val visibleLegacyTextGroups = linkedSetOf<Long>()
         val boundsMap = currentStrokeBounds()
         for (stroke in currentStrokes()) {
-            if (stroke.annotationText != null) continue
             if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(stroke, collapsedFoldRegions)) continue
+            if (stroke.annotationText != null && !visibleLegacyTextGroups.add(legacyTextGroupKey(stroke))) continue
             val lineBounds = boundsMap[stroke.id]
                 ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
                 ?: continue
@@ -183,11 +236,13 @@ class DrawingStrokeWorkspace(
             clear()
             putAll(rebuilt)
         }
+        invalidateFoldMarkerCache()
     }
 
     fun updateStrokeBounds(stroke: StrokePath) {
         val bounds = DrawingViewportTools.computeStrokeLineBounds(stroke) ?: return
         currentStrokeBounds()[stroke.id] = bounds
+        invalidateFoldMarkerCache()
     }
 
     fun expandStrokeBoundsWithAnchor(stroke: StrokePath, anchor: AnchorPoint) {
@@ -205,11 +260,13 @@ class DrawingStrokeWorkspace(
 
     fun invalidateStrokeGeometry(stroke: StrokePath) {
         currentStrokeGeometries().remove(stroke.id)
+        invalidateFoldMarkerCache()
     }
 
     fun resetStrokeGeometryCache(document: Document) {
         strokeStore.currentStrokeGeometries(document).clear()
         clearObjectBoundsCaches()
+        invalidateFoldMarkerCache()
     }
 
     fun buildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
@@ -225,12 +282,24 @@ class DrawingStrokeWorkspace(
         val currentFoldLayoutSignature = coordinateMapper.currentFoldLayoutSignature()
         val cached = cache[stroke.id]
         if (cached != null && cached.foldLayoutSignature == currentFoldLayoutSignature) {
+            DrawingPerformanceDiagnostics.recordGeometryCacheHit()
             return cached
         }
 
+        DrawingPerformanceDiagnostics.recordGeometryCacheMiss()
         val built = buildStrokeGeometryContent(stroke) ?: return null
         cache[stroke.id] = built
         return built
+    }
+
+    private fun invalidateStrokeCaches() {
+        currentStrokeBounds().clear()
+        currentStrokeGeometries().clear()
+        invalidateFoldMarkerCache()
+    }
+
+    private fun invalidateFoldMarkerCache() {
+        collapsedFoldMarkersCache = null
     }
 
     private fun boundsCacheKey(id: Long, anchor: AnchorPoint, width: Int, height: Int): ObjectBoundsCacheKey {
@@ -246,5 +315,15 @@ class DrawingStrokeWorkspace(
             foldLayoutSignature = coordinateMapper.currentFoldLayoutSignature()
         )
     }
+
+    private fun legacyTextGroupKey(stroke: StrokePath): Long {
+        return if (stroke.objectGroupId != 0L) stroke.objectGroupId else stroke.id
+    }
+
+    private data class CollapsedFoldMarkersCacheKey(
+        val foldLayoutSignature: Int,
+        val strokeSignature: Int,
+        val collapsedRegionSignature: Int
+    )
 }
 

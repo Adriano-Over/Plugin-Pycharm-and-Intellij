@@ -31,8 +31,13 @@ internal class AnnotationImageCache {
             kind = annotation.kind,
             style = annotation.style
         )
-        return imagesByKey.getOrPut(key) {
-            AnnotationRenderer.render(annotation)
+        imagesByKey[key]?.let { image ->
+            DrawingPerformanceDiagnostics.recordAnnotationImageCacheHit()
+            return image
+        }
+        DrawingPerformanceDiagnostics.recordAnnotationImageCacheMiss()
+        return AnnotationRenderer.render(annotation).also { image ->
+            imagesByKey[key] = image
         }
     }
 
