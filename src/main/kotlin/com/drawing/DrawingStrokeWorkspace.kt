@@ -3,6 +3,18 @@ package com.drawing
 import com.intellij.openapi.editor.Document
 import java.awt.Rectangle
 
+private data class ObjectBoundsCacheKey(
+    val id: Long,
+    val anchorLine: Int,
+    val anchorColumn: Int,
+    val anchorDx: Int,
+    val anchorDy: Int,
+    val anchorOffset: Int,
+    val width: Int,
+    val height: Int,
+    val foldLayoutSignature: Int
+)
+
 class DrawingStrokeWorkspace(
     private val currentDocument: () -> Document?,
     private val strokeStore: DrawingStrokeStore,
@@ -11,6 +23,8 @@ class DrawingStrokeWorkspace(
 ) {
     private val rasterFillImageCache = RasterFillImageCache()
     private val annotationImageCache = AnnotationImageCache()
+    private val rasterFillBoundsCache = mutableMapOf<Long, Pair<ObjectBoundsCacheKey, Rectangle>>()
+    private val annotationBoundsCache = mutableMapOf<Long, Pair<ObjectBoundsCacheKey, Rectangle>>()
 
     fun currentStrokes(): MutableList<StrokePath> {
         return strokeStore.currentStrokes(currentDocument())
@@ -38,17 +52,21 @@ class DrawingStrokeWorkspace(
 
     fun setRasterFills(document: Document, rasterFills: MutableList<RasterFillPath>) {
         strokeStore.setRasterFills(document, rasterFills)
+        rasterFillBoundsCache.clear()
     }
 
     fun setAnnotations(document: Document, annotations: MutableList<AnnotationPath>) {
         strokeStore.setAnnotations(document, annotations)
         annotationImageCache.clear()
+        annotationBoundsCache.clear()
     }
 
     fun clearDocument(document: Document) {
         strokeStore.clearDocument(document)
         rasterFillImageCache.clear()
         annotationImageCache.clear()
+        rasterFillBoundsCache.clear()
+        annotationBoundsCache.clear()
     }
 
     fun addStroke(stroke: StrokePath) {
@@ -59,31 +77,101 @@ class DrawingStrokeWorkspace(
 
     fun addRasterFill(fill: RasterFillPath) {
         currentRasterFills().add(fill)
+        invalidateRasterFillBounds(fill.id)
     }
 
     fun addAnnotation(annotation: AnnotationPath) {
         currentAnnotations().add(annotation)
         annotationImageCache.invalidate(annotation.id)
+        invalidateAnnotationBounds(annotation.id)
     }
 
     fun rasterFillContentBounds(fill: RasterFillPath): Rectangle? {
         if (fill.width <= 0 || fill.height <= 0) return null
+        val key = boundsCacheKey(fill.id, fill.anchor, fill.width, fill.height)
+        rasterFillBoundsCache[fill.id]?.let { (cachedKey, cachedBounds) ->
+            if (cachedKey == key) return Rectangle(cachedBounds)
+        }
         val topLeft = coordinateMapper.toContentPoint(fill.anchor.copy()) ?: return null
-        return Rectangle(topLeft.x, topLeft.y, fill.width, fill.height)
+        val bounds = Rectangle(topLeft.x, topLeft.y, fill.width, fill.height)
+        rasterFillBoundsCache[fill.id] = key to Rectangle(bounds)
+        return bounds
     }
 
     fun rasterFillImage(fill: RasterFillPath) = rasterFillImageCache.get(fill)
 
     fun annotationContentBounds(annotation: AnnotationPath): Rectangle? {
         if (annotation.width <= 0 || annotation.height <= 0) return null
+        val key = boundsCacheKey(annotation.id, annotation.anchor, annotation.width, annotation.height)
+        annotationBoundsCache[annotation.id]?.let { (cachedKey, cachedBounds) ->
+            if (cachedKey == key) return Rectangle(cachedBounds)
+        }
         val topLeft = coordinateMapper.toContentPoint(annotation.anchor.copy()) ?: return null
-        return Rectangle(topLeft.x, topLeft.y, annotation.width, annotation.height)
+        val bounds = Rectangle(topLeft.x, topLeft.y, annotation.width, annotation.height)
+        annotationBoundsCache[annotation.id] = key to Rectangle(bounds)
+        return bounds
     }
 
     fun annotationImage(annotation: AnnotationPath) = annotationImageCache.getOrRender(annotation)
 
     fun invalidateAnnotation(annotationId: Long) {
         annotationImageCache.invalidate(annotationId)
+        invalidateAnnotationBounds(annotationId)
+    }
+
+    fun invalidateRasterFillBounds(fillId: Long) {
+        rasterFillBoundsCache.remove(fillId)
+    }
+
+    fun invalidateAnnotationBounds(annotationId: Long) {
+        annotationBoundsCache.remove(annotationId)
+    }
+
+    fun clearObjectBoundsCaches() {
+        rasterFillBoundsCache.clear()
+        annotationBoundsCache.clear()
+    }
+
+    fun visibleStrokes(
+        visibleLineRange: IntRange,
+        visibleContentClip: Rectangle,
+        collapsedFoldRegions: List<CollapsedFoldRegionSnapshot>
+    ): List<StrokePath> {
+        val visible = mutableListOf<StrokePath>()
+        val boundsMap = currentStrokeBounds()
+        for (stroke in currentStrokes()) {
+            if (stroke.annotationText != null) continue
+            if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(stroke, collapsedFoldRegions)) continue
+            val lineBounds = boundsMap[stroke.id]
+                ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
+                ?: continue
+            if (lineBounds.maxLine < visibleLineRange.first || lineBounds.minLine > visibleLineRange.last) continue
+            val geometry = getOrBuildStrokeGeometryContent(stroke) ?: continue
+            if (geometry.bounds.intersects(visibleContentClip)) {
+                visible += stroke
+            }
+        }
+        return visible
+    }
+
+    fun visibleRasterFills(
+        visibleContentClip: Rectangle,
+        collapsedFoldRegions: List<CollapsedFoldRegionSnapshot>
+    ): List<RasterFillPath> {
+        return currentRasterFills().filter { fill ->
+            !DrawingViewportTools.isRasterFillHiddenByCollapsedFold(fill, collapsedFoldRegions) &&
+                rasterFillContentBounds(fill)?.intersects(visibleContentClip) == true
+        }
+    }
+
+    fun visibleAnnotations(
+        visibleContentClip: Rectangle,
+        collapsedFoldRegions: List<CollapsedFoldRegionSnapshot>
+    ): List<AnnotationPath> {
+        return currentAnnotations().filter { annotation ->
+            !DrawingViewportTools.isAnnotationHiddenByCollapsedFold(annotation, collapsedFoldRegions) &&
+                annotationContentBounds(annotation)?.intersects(visibleContentClip) == true
+        }
     }
 
     fun rebuildStrokeBounds(document: Document) {
@@ -121,6 +209,7 @@ class DrawingStrokeWorkspace(
 
     fun resetStrokeGeometryCache(document: Document) {
         strokeStore.currentStrokeGeometries(document).clear()
+        clearObjectBoundsCaches()
     }
 
     fun buildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
@@ -142,6 +231,20 @@ class DrawingStrokeWorkspace(
         val built = buildStrokeGeometryContent(stroke) ?: return null
         cache[stroke.id] = built
         return built
+    }
+
+    private fun boundsCacheKey(id: Long, anchor: AnchorPoint, width: Int, height: Int): ObjectBoundsCacheKey {
+        return ObjectBoundsCacheKey(
+            id = id,
+            anchorLine = anchor.line,
+            anchorColumn = anchor.column,
+            anchorDx = anchor.dx,
+            anchorDy = anchor.dy,
+            anchorOffset = anchor.offset,
+            width = width,
+            height = height,
+            foldLayoutSignature = coordinateMapper.currentFoldLayoutSignature()
+        )
     }
 }
 

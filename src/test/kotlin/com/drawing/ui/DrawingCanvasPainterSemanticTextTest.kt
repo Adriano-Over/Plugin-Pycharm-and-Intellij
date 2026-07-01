@@ -28,7 +28,7 @@ import javax.swing.JPanel
 
 class DrawingCanvasPainterSemanticTextTest {
     @Test
-    fun `semantic text annotations bypass normal stroke painting`() {
+    fun `legacy semantic text strokes are skipped by the hot paint path`() {
         val canvas = JPanel().apply {
             setSize(320, 180)
         }
@@ -87,25 +87,12 @@ class DrawingCanvasPainterSemanticTextTest {
         }
 
         val paintCalls = renderer.paintStrokeCalls
-        assertEquals(0, paintCalls, "Semantic text should render without the normal stroke renderer")
-        val firstPaintBounds = paintedPixelBounds(image)
-        assertEquals(true, firstPaintBounds.drawnPixels > 0, "Semantic text should produce visible pixels")
-        assertEquals(true, firstPaintBounds.width >= 40, "Semantic text should not collapse horizontally")
-        assertEquals(true, firstPaintBounds.height >= 12, "Semantic text should not collapse vertically")
-
-        semanticStroke.points.forEach { it.dy += 40 }
-        workspace.resetStrokeGeometryCache(document)
-
-        val movedImage = BufferedImage(320, 180, BufferedImage.TYPE_INT_ARGB)
-        val movedGraphics = movedImage.createGraphics()
-        try {
-            painter.paintEditorContent(movedGraphics)
-        } finally {
-            movedGraphics.dispose()
-        }
-
-        val movedPaintBounds = paintedPixelBounds(movedImage)
-        assertEquals(true, movedPaintBounds.minY > firstPaintBounds.minY + 20, "Semantic text should follow anchored geometry")
+        assertEquals(0, paintCalls, "Legacy text strokes should not go through the normal stroke renderer")
+        assertEquals(
+            0,
+            paintedPixelBounds(image).drawnPixels,
+            "Legacy text strokes should be migrated to AnnotationPath instead of rendered during paint"
+        )
     }
 
     private data class PixelBounds(

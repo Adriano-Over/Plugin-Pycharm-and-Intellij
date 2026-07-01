@@ -22,7 +22,9 @@ class DrawingHistoryStore(
         currentAnnotations: List<AnnotationPath> = emptyList()
     ) {
         val undo = undoByDocument.getOrPut(document) { mutableListOf() }
-        undo += snapshot(currentStrokes, currentRasterFills, currentAnnotations)
+        val newSnapshot = snapshot(currentStrokes, currentRasterFills, currentAnnotations)
+        if (undo.lastOrNull() == newSnapshot) return
+        undo += newSnapshot
         if (undo.size > maxUndoDepth) {
             undo.removeAt(0)
         }

@@ -42,6 +42,24 @@ class DrawingHistoryStoreTest {
         assertEquals(30, restoredRedo.annotations.single().anchor.dx)
     }
 
+    @Test
+    fun `duplicate undo states are not saved`() {
+        val document = testDocument()
+        val history = DrawingHistoryStore()
+        val stroke = StrokePath(
+            color = Color.RED,
+            width = 3.5f,
+            points = mutableListOf(AnchorPoint(line = 0, column = 0, dx = 1, dy = 2))
+        )
+
+        history.saveStateForUndo(document, listOf(stroke))
+        history.saveStateForUndo(document, listOf(stroke))
+
+        assertEquals(true, history.canUndo(document))
+        history.restoreUndo(document, emptyList())
+        assertEquals(false, history.canUndo(document), "Identical consecutive states should only create one undo entry")
+    }
+
     private fun rasterFill(id: Long, dx: Int): RasterFillPath {
         return RasterFillPath(
             id = id,

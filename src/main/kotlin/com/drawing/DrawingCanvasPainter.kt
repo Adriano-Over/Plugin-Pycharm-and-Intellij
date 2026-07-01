@@ -35,6 +35,8 @@ class DrawingCanvasPainter(
     private val strokeWorkspace: DrawingStrokeWorkspace
 ) {
     fun paint(graphics: Graphics) {
+        val paintStartedAt = System.nanoTime()
+        val stats = PaintPerformanceStats()
         val currentEditor = editorProvider() ?: return
         val g = graphics as? Graphics2D ?: return
 
@@ -54,7 +56,6 @@ class DrawingCanvasPainter(
         }
 
         val visibleLineRange = DrawingViewportTools.resolveVisibleLineRange(canvas, currentEditor, clip)
-        val boundsMap = strokeWorkspace.currentStrokeBounds()
 
         val contentOrigin = SwingUtilities.convertPoint(currentEditor.contentComponent, Point(0, 0), canvas)
         val contentClip = Rectangle(
@@ -64,31 +65,32 @@ class DrawingCanvasPainter(
             clip.height
         )
         val collapsedFoldRegions = collapsedFoldRegionsProvider()
-        val renderedSemanticAnnotationGroups = linkedSetOf<Long>()
         val gContent = g.create() as Graphics2D
         gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
 
         try {
-            paintRasterFills(gContent, contentClip, collapsedFoldRegions)
+            stats.strokesInspected = currentStrokesProvider().size
+            stats.rasterFillsInspected = currentRasterFillsProvider().size
+            stats.annotationsInspected = currentAnnotationsProvider().size
 
-            for (stroke in currentStrokesProvider()) {
-                if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(stroke, collapsedFoldRegions)) {
-                    continue
-                }
-                val bounds = boundsMap[stroke.id]
-                    ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
-                if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
-                    paintStroke(
-                        g = gContent,
-                        stroke = stroke,
-                        preview = false,
-                        visibleContentClip = contentClip,
-                        renderedSemanticAnnotationGroups = renderedSemanticAnnotationGroups
-                    )
-                }
+            stats.rasterFillsPainted = paintRasterFills(gContent, contentClip, collapsedFoldRegions)
+
+            val visibleStrokes = strokeWorkspace.visibleStrokes(
+                visibleLineRange = visibleLineRange.first..visibleLineRange.second,
+                visibleContentClip = contentClip,
+                collapsedFoldRegions = collapsedFoldRegions
+            )
+            stats.strokesPainted = visibleStrokes.size
+            for (stroke in visibleStrokes) {
+                paintStroke(
+                    g = gContent,
+                    stroke = stroke,
+                    preview = false,
+                    visibleContentClip = contentClip
+                )
             }
 
-            paintAnnotations(gContent, contentClip, collapsedFoldRegions)
+            stats.annotationsPainted = paintAnnotations(gContent, contentClip, collapsedFoldRegions)
             paintSelectionHighlight(gContent, contentClip)
             paintCollapsedFoldMarkers(gContent, collapsedFoldRegions, contentClip)
 
@@ -121,10 +123,14 @@ class DrawingCanvasPainter(
 
         paintSelectionMarquee(g)
         paintToolPreview(g)
+        stats.paintMs = (System.nanoTime() - paintStartedAt) / 1_000_000L
+        DrawingPerformanceDiagnostics.logSlowPaint(stats)
     }
 
 
     fun paintEditorContent(graphics: Graphics) {
+        val paintStartedAt = System.nanoTime()
+        val stats = PaintPerformanceStats()
         val currentEditor = editorProvider() ?: return
         val g = graphics as? Graphics2D ?: return
 
@@ -144,30 +150,33 @@ class DrawingCanvasPainter(
         }
 
         val visibleLineRange = DrawingViewportTools.resolveVisibleLineRangeInContent(currentEditor, clip)
-        val boundsMap = strokeWorkspace.currentStrokeBounds()
-        val renderedSemanticAnnotationGroups = linkedSetOf<Long>()
-        paintRasterFills(g, clip, collapsedFoldRegionsProvider())
+        val collapsedFoldRegions = collapsedFoldRegionsProvider()
+        stats.strokesInspected = currentStrokesProvider().size
+        stats.rasterFillsInspected = currentRasterFillsProvider().size
+        stats.annotationsInspected = currentAnnotationsProvider().size
+        stats.rasterFillsPainted = paintRasterFills(g, clip, collapsedFoldRegions)
 
-        for (stroke in currentStrokesProvider()) {
-            val bounds = boundsMap[stroke.id]
-                ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
-                if (bounds != null && bounds.maxLine >= visibleLineRange.first && bounds.minLine <= visibleLineRange.second) {
-                paintStroke(
-                    g = g,
-                    stroke = stroke,
-                    preview = false,
-                    visibleContentClip = clip,
-                    renderedSemanticAnnotationGroups = renderedSemanticAnnotationGroups
-                )
-            }
+        val visibleStrokes = strokeWorkspace.visibleStrokes(
+            visibleLineRange = visibleLineRange.first..visibleLineRange.second,
+            visibleContentClip = clip,
+            collapsedFoldRegions = collapsedFoldRegions
+        )
+        stats.strokesPainted = visibleStrokes.size
+        for (stroke in visibleStrokes) {
+            paintStroke(
+                g = g,
+                stroke = stroke,
+                preview = false,
+                visibleContentClip = clip
+            )
         }
 
-        paintAnnotations(g, clip, collapsedFoldRegionsProvider())
+        stats.annotationsPainted = paintAnnotations(g, clip, collapsedFoldRegions)
         paintSelectionHighlight(g, clip)
-        paintCollapsedFoldMarkers(g, collapsedFoldRegionsProvider(), clip)
+        paintCollapsedFoldMarkers(g, collapsedFoldRegions, clip)
 
         shapePreviewProvider()?.let { preview ->
-            if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(preview, collapsedFoldRegionsProvider())) {
+            if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(preview, collapsedFoldRegions)) {
                 return@let
             }
             val previewBounds = DrawingViewportTools.computeStrokeLineBounds(preview)
@@ -192,6 +201,8 @@ class DrawingCanvasPainter(
 
         paintSelectionMarqueeInEditorContent(g, currentEditor)
         paintToolPreviewInEditorContent(g, currentEditor)
+        stats.paintMs = (System.nanoTime() - paintStartedAt) / 1_000_000L
+        DrawingPerformanceDiagnostics.logSlowPaint(stats)
     }
 
     private fun paintSelectionMarquee(g: Graphics2D) {
@@ -245,32 +256,30 @@ class DrawingCanvasPainter(
         g: Graphics2D,
         visibleContentClip: Rectangle,
         collapsedRegions: List<CollapsedFoldRegionSnapshot>
-    ) {
-        for (fill in currentRasterFillsProvider()) {
-            if (DrawingViewportTools.isRasterFillHiddenByCollapsedFold(fill, collapsedRegions)) {
-                continue
-            }
+    ): Int {
+        var painted = 0
+        for (fill in strokeWorkspace.visibleRasterFills(visibleContentClip, collapsedRegions)) {
             val bounds = strokeWorkspace.rasterFillContentBounds(fill) ?: continue
-            if (!bounds.intersects(visibleContentClip)) continue
             val image = runCatching { strokeWorkspace.rasterFillImage(fill) }.getOrNull() ?: continue
             g.drawImage(image, bounds.x, bounds.y, null)
+            painted += 1
         }
+        return painted
     }
 
     private fun paintAnnotations(
         g: Graphics2D,
         visibleContentClip: Rectangle,
         collapsedRegions: List<CollapsedFoldRegionSnapshot>
-    ) {
-        for (annotation in currentAnnotationsProvider()) {
-            if (DrawingViewportTools.isAnnotationHiddenByCollapsedFold(annotation, collapsedRegions)) {
-                continue
-            }
+    ): Int {
+        var painted = 0
+        for (annotation in strokeWorkspace.visibleAnnotations(visibleContentClip, collapsedRegions)) {
             val bounds = strokeWorkspace.annotationContentBounds(annotation) ?: continue
-            if (!bounds.intersects(visibleContentClip)) continue
             val image = runCatching { strokeWorkspace.annotationImage(annotation) }.getOrNull() ?: continue
             g.drawImage(image, bounds.x, bounds.y, null)
+            painted += 1
         }
+        return painted
     }
 
     private fun paintCollapsedFoldMarkers(
@@ -559,21 +568,11 @@ class DrawingCanvasPainter(
         g: Graphics2D,
         stroke: StrokePath,
         preview: Boolean,
-        visibleContentClip: Rectangle?,
-        renderedSemanticAnnotationGroups: MutableSet<Long>
+        visibleContentClip: Rectangle?
     ) {
         if (stroke.annotationText != null) {
-            val semanticKey = annotationGroupKey(stroke)
-            if (!renderedSemanticAnnotationGroups.add(semanticKey)) {
-                return
-            }
-            val geometry = if (preview) {
-                strokeWorkspace.buildStrokeGeometryContent(stroke)
-            } else {
-                strokeWorkspace.getOrBuildStrokeGeometryContent(stroke)
-            } ?: return
-
-            paintSemanticAnnotation(g, stroke, geometry, visibleContentClip)
+            // Legacy semantic text strokes are migrated to AnnotationPath on load.
+            // Keeping them out of paint avoids the old all-stroke group scan.
             return
         }
 

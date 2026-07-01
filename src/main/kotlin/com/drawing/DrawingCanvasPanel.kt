@@ -91,6 +91,7 @@ class DrawingCanvasPanel(
         editorProvider = { editor },
         minCodeClearancePx = minCodeClearancePx
     )
+    private val dirtyRepaintScheduler = DrawingDirtyRepaintScheduler(this)
 
     private val strokeRenderer = DrawingStrokeRenderer(
         canvasPadding = canvasPadding,
@@ -152,7 +153,8 @@ class DrawingCanvasPanel(
         shapeEdgeSpacing = shapeEdgeSpacing,
         ellipseSegments = ellipseSegments,
         balloonTextStyleProvider = { textStyleForSelectedShape() },
-        balloonTextEditor = ::openTextEditor
+        balloonTextEditor = ::openTextEditor,
+        dirtyRepaintScheduler = dirtyRepaintScheduler
     )
 
     private val canvasPainter = DrawingCanvasPainter(

@@ -44,7 +44,8 @@ class DrawingCanvasController(
     private val shapeEdgeSpacing: Double,
     private val ellipseSegments: Int,
     private val balloonTextStyleProvider: () -> BalloonTextStyle = { BalloonTextStyle.SOLID },
-    private val balloonTextEditor: (Rectangle, (String?) -> Unit) -> Unit = { _, commit -> commit(null) }
+    private val balloonTextEditor: (Rectangle, (String?) -> Unit) -> Unit = { _, commit -> commit(null) },
+    private val dirtyRepaintScheduler: DrawingDirtyRepaintScheduler? = null
 ) {
     private val drawStrokeWidth = 3.5f
     private val shapePreviewDirtyPaddingPx = dirtyPaddingPx + 120
@@ -251,9 +252,10 @@ class DrawingCanvasController(
         if (marqueeStart != null) {
             val oldBounds = selectionMarqueeBounds?.let { Rectangle(it) }
             selectionMarqueeBounds = rectangleFromPoints(marqueeStart, safePoint)
-            DrawingViewportTools.repaintRect(
-                canvas,
-                DrawingViewportTools.unionRectangles(oldBounds?.grown(selectionRepaintPaddingPx), selectionMarqueeBounds?.grown(selectionRepaintPaddingPx))
+            repaintDirty(
+                bounds = DrawingViewportTools.unionRectangles(oldBounds, selectionMarqueeBounds),
+                padding = selectionRepaintPaddingPx,
+                coalesce = true
             )
             return
         }
@@ -285,6 +287,7 @@ class DrawingCanvasController(
         }
         for (fill in rasterFills) {
             coordinateMapper.moveRasterFillByViewDelta(fill, deltaX, deltaY)
+            strokeWorkspace.invalidateRasterFillBounds(fill.id)
         }
         for (annotation in annotations) {
             coordinateMapper.moveAnnotationByViewDelta(annotation, deltaX, deltaY)
@@ -298,7 +301,7 @@ class DrawingCanvasController(
             strokeWorkspace.invalidateStrokeGeometry(stroke)
         }
         val afterBounds = selectionBounds(strokes, rasterFills, annotations)
-        DrawingViewportTools.repaintRect(canvas, DrawingViewportTools.unionRectangles(beforeBounds, afterBounds))
+        repaintDirty(DrawingViewportTools.unionRectangles(beforeBounds, afterBounds), coalesce = true)
     }
 
     fun handleSelectReleased() {
@@ -371,7 +374,7 @@ class DrawingCanvasController(
 
         val samples = strokePathTools.buildEraseSamples(previous, safePoint)
         applyErasePath(samples)
-        DrawingViewportTools.repaintAround(canvas, samples, dirtyPaddingPx + eraseRadius.roundToInt())
+        repaintAround(samples, dirtyPaddingPx + eraseRadius.roundToInt(), coalesce = true)
     }
 
     fun handleEraseReleased() {
@@ -389,11 +392,7 @@ class DrawingCanvasController(
         shapePreviewSetter(buildShapeStroke(start, safePoint, selectedShapeKindProvider(), isShiftDown))
         val preview = shapePreviewGetter()
         val newPreviewPoints = preview?.points?.mapNotNull(coordinateMapper::toViewPoint).orEmpty()
-        DrawingViewportTools.repaintAround(
-            canvas = canvas,
-            points = oldPreviewPoints + newPreviewPoints + listOf(start, safePoint),
-            padding = shapePreviewDirtyPaddingPx
-        )
+        repaintAround(oldPreviewPoints + newPreviewPoints + listOf(start, safePoint), shapePreviewDirtyPaddingPx, coalesce = true)
     }
 
     fun handleShapeReleased() {
@@ -598,7 +597,7 @@ class DrawingCanvasController(
             }
             if (acceptedPoints.isNotEmpty()) {
                 strokeWorkspace.invalidateStrokeGeometry(stroke)
-                DrawingViewportTools.repaintAround(canvas, acceptedPoints + listOf(previous, safePoint), dirtyPaddingPx)
+                repaintAround(acceptedPoints + listOf(previous, safePoint), dirtyPaddingPx, coalesce = true)
             }
         }
     }
@@ -916,6 +915,16 @@ class DrawingCanvasController(
 
     private fun Rectangle.grown(padding: Int): Rectangle {
         return Rectangle(this).apply { grow(padding, padding) }
+    }
+
+    private fun repaintDirty(bounds: Rectangle?, padding: Int = 0, coalesce: Boolean = false) {
+        dirtyRepaintScheduler?.repaintDirty(bounds, padding, coalesce)
+            ?: DrawingViewportTools.repaintRect(canvas, bounds?.grown(padding))
+    }
+
+    private fun repaintAround(points: List<Point>, padding: Int, coalesce: Boolean = false) {
+        dirtyRepaintScheduler?.repaintAround(points, padding, coalesce)
+            ?: DrawingViewportTools.repaintAround(canvas, points, padding)
     }
 
     private fun shiftRasterFillGroupsOutOfCodeText(fills: List<RasterFillPath>): Boolean {
