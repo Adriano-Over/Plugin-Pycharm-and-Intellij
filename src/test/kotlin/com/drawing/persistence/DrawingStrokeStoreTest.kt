@@ -4,6 +4,8 @@ import com.drawing.AnchorPoint
 import com.drawing.BalloonTextStyle
 import com.drawing.DrawingStrokeStore
 import com.drawing.DrawingStateService
+import com.drawing.RasterFillCodec
+import com.drawing.RasterFillPath
 import com.drawing.SavedPoint
 import com.drawing.SavedStroke
 import com.drawing.ShapeKind
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 import java.awt.Color
 import java.awt.Rectangle
+import java.awt.image.BufferedImage
 
 class DrawingStrokeStoreTest {
     private val projectBasePath = "C:/work/drawing-project"
@@ -152,5 +155,64 @@ class DrawingStrokeStoreTest {
         assertEquals("Hello, Drawing", loaded.single().annotationText)
         assertEquals(BalloonTextStyle.OUTLINE, loaded.single().annotationTextStyle)
         assertEquals(Rectangle(40, 50, 180, 60), loaded.single().annotationBounds)
+    }
+
+    @Test
+    fun `raster fills round trip through drawing persistence`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val store = DrawingStrokeStore(service)
+        val document = testDocument()
+        val image = BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)
+        image.setRGB(0, 0, Color.GREEN.rgb)
+        image.setRGB(1, 1, Color(0, 255, 0, 120).rgb)
+        val fill = RasterFillPath(
+            id = 123L,
+            color = Color.GREEN,
+            anchor = AnchorPoint(
+                line = 4,
+                column = 9,
+                dx = 20,
+                dy = 30,
+                offset = 40,
+                outsideCode = true,
+                afterLineEndPx = 50,
+                foldHiddenHeightAbove = 60
+            ),
+            width = 2,
+            height = 2,
+            pngBase64 = RasterFillCodec.encodePngBase64(image),
+            objectGroupId = 456L
+        )
+
+        store.persistDrawing(filePath, emptyList(), listOf(fill))
+
+        val saved = service.getRasterFills(filePath).single()
+        assertEquals(123L, saved.id)
+        assertEquals(Color.GREEN.rgb, saved.color)
+        assertEquals(2, saved.width)
+        assertEquals(2, saved.height)
+        assertEquals(456L, saved.objectGroupId)
+        assertEquals(3, saved.anchor.anchorStorageVersion)
+        assertEquals(60, saved.anchor.foldHiddenHeightAbove)
+
+        val loadedStrokes = store.loadPersistedStrokes(filePath, document) { _, anchor ->
+            anchor.column += 1
+        }
+        val loadedFill = store.currentRasterFills(document).single()
+
+        assertEquals(emptyList<StrokePath>(), loadedStrokes)
+        assertEquals(123L, loadedFill.id)
+        assertEquals(Color.GREEN, loadedFill.color)
+        assertEquals(2, loadedFill.width)
+        assertEquals(2, loadedFill.height)
+        assertEquals(456L, loadedFill.objectGroupId)
+        assertEquals(10, loadedFill.anchor.column)
+        assertEquals(20, loadedFill.anchor.dx)
+        assertEquals(30, loadedFill.anchor.dy)
+        assertEquals(40, loadedFill.anchor.offset)
+        assertEquals(true, loadedFill.anchor.outsideCode)
+        assertEquals(50, loadedFill.anchor.afterLineEndPx)
+        assertEquals(60, loadedFill.anchor.foldHiddenHeightAbove)
+        assertEquals(Color.GREEN.rgb, RasterFillCodec.decodePngBase64(loadedFill.pngBase64).getRGB(0, 0))
     }
 }

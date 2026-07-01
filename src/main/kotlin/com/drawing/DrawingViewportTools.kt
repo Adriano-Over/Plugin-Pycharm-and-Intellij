@@ -160,6 +160,16 @@ object DrawingViewportTools {
         }
     }
 
+    fun isRasterFillHiddenByCollapsedFold(
+        fill: RasterFillPath,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>
+    ): Boolean {
+        if (collapsedRegions.isEmpty()) return false
+        return collapsedRegions.any { region ->
+            fill.anchor.offset in region.startOffset..region.endOffset
+        }
+    }
+
     fun collapsedFoldMarkersFor(
         strokes: Iterable<StrokePath>,
         collapsedRegions: List<CollapsedFoldRegionSnapshot>

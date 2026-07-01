@@ -253,11 +253,58 @@ class DrawingCoordinateMapper(
         return requiredLeftX - minX
     }
 
+    fun requiredShiftOutOfCodeText(fill: RasterFillPath): Int {
+        if (fill.width <= 0 || fill.height <= 0) return 0
+        val editor = editorProvider() ?: return 0
+        val document = editor.document
+        if (document.lineCount <= 0) return 0
+
+        val topLeft = toContentPoint(fill.anchor.copy()) ?: return 0
+        val minX = topLeft.x
+        val topY = topLeft.y
+        val bottomY = topLeft.y + fill.height
+        val topLine = editor.xyToLogicalPosition(Point(0, topY)).line.coerceIn(0, document.lineCount - 1)
+        val bottomLine = editor.xyToLogicalPosition(Point(0, bottomY)).line.coerceIn(0, document.lineCount - 1)
+        if (topLine > bottomLine) return 0
+
+        var requiredLeftX = Int.MIN_VALUE
+        for (line in topLine..bottomLine) {
+            val lineInfo = resolveLineInfo(editor.logicalPositionToXY(LogicalPosition(line, 0))) ?: continue
+            if (!lineInfo.hasCodeText) continue
+            requiredLeftX = max(requiredLeftX, lineInfo.lineEndX + minCodeClearancePx)
+        }
+        if (requiredLeftX == Int.MIN_VALUE || minX >= requiredLeftX) return 0
+
+        return requiredLeftX - minX
+    }
+
     fun shiftStrokeHorizontally(stroke: StrokePath, shiftX: Int) {
         if (shiftX == 0) return
         for (point in stroke.points) {
             point.dx += shiftX
         }
+    }
+
+    fun shiftRasterFillHorizontally(fill: RasterFillPath, shiftX: Int) {
+        if (shiftX == 0) return
+        fill.anchor.dx += shiftX
+    }
+
+    fun moveRasterFillByViewDelta(fill: RasterFillPath, deltaX: Int, deltaY: Int): Boolean {
+        if (deltaX == 0 && deltaY == 0) return false
+        val topLeft = toViewPoint(fill.anchor.copy()) ?: return false
+        val moved = Point(topLeft.x + deltaX, topLeft.y + deltaY)
+        val movedAnchor = viewPointToAnchor(moved, allowCodeArea = true) ?: return false
+        fill.anchor.line = movedAnchor.line
+        fill.anchor.column = movedAnchor.column
+        fill.anchor.dx = movedAnchor.dx
+        fill.anchor.dy = movedAnchor.dy
+        fill.anchor.offset = movedAnchor.offset
+        fill.anchor.outsideCode = movedAnchor.outsideCode
+        fill.anchor.afterLineEndPx = movedAnchor.afterLineEndPx
+        fill.anchor.foldHiddenHeightAbove = movedAnchor.foldHiddenHeightAbove
+        fill.anchor.foldLayoutBaseY = movedAnchor.foldLayoutBaseY
+        return true
     }
 
     fun moveStrokesByViewDelta(strokes: List<StrokePath>, deltaX: Int, deltaY: Int): Boolean {
@@ -445,10 +492,19 @@ class DrawingCoordinateMapper(
 
         for (stroke in strokes) {
             for (point in stroke.points) {
-                point.offset = remapOffset(point.offset, editStart, replacedEnd, insertedLength, delta)
-                syncAnchorFromOffset(document, point)
+                remapAnchorForDocumentChange(document, event, point)
             }
         }
+    }
+
+    fun remapAnchorForDocumentChange(document: Document, event: DocumentEvent, anchor: AnchorPoint) {
+        val editStart = event.offset
+        val replacedEnd = event.offset + event.oldLength
+        val insertedLength = event.newLength
+        val delta = insertedLength - event.oldLength
+
+        anchor.offset = remapOffset(anchor.offset, editStart, replacedEnd, insertedLength, delta)
+        syncAnchorFromOffset(document, anchor)
     }
 
     fun normalizeAnchor(document: Document, anchor: AnchorPoint) {

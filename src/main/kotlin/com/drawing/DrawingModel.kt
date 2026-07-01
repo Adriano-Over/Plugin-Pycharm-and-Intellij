@@ -84,6 +84,26 @@ fun StrokePath.usesRigidObjectAnchoring(): Boolean {
     return rigidObjectAnchor || kind?.usesRigidObjectAnchoring() == true
 }
 
+data class RasterFillPath(
+    val id: Long = nextStrokeObjectGroupId(),
+    val color: Color,
+    val anchor: AnchorPoint,
+    val width: Int,
+    val height: Int,
+    val pngBase64: String,
+    var objectGroupId: Long = 0L
+) {
+    fun deepCopy(): RasterFillPath = RasterFillPath(
+        id = id,
+        color = Color(color.red, color.green, color.blue, color.alpha),
+        anchor = anchor.copy(),
+        width = width,
+        height = height,
+        pngBase64 = pngBase64,
+        objectGroupId = objectGroupId
+    )
+}
+
 data class CollapsedFoldRegionSnapshot(
     val startOffset: Int,
     val endOffset: Int,

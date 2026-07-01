@@ -14,6 +14,7 @@ class DrawingStrokeStore(
     private val stateService: DrawingStateService
 ) {
     private val strokesByDocument = WeakHashMap<Document, MutableList<StrokePath>>()
+    private val rasterFillsByDocument = WeakHashMap<Document, MutableList<RasterFillPath>>()
     private val strokeBoundsByDocument = WeakHashMap<Document, MutableMap<Long, StrokeLineBounds>>()
     private val strokeGeometryByDocument = WeakHashMap<Document, MutableMap<Long, StrokeGeometryContent>>()
 
@@ -41,6 +42,11 @@ class DrawingStrokeStore(
         return strokesByDocument.getOrPut(document) { mutableListOf() }
     }
 
+    fun currentRasterFills(document: Document?): MutableList<RasterFillPath> {
+        if (document == null) return mutableListOf()
+        return rasterFillsByDocument.getOrPut(document) { mutableListOf() }
+    }
+
     fun currentStrokeBounds(document: Document?): MutableMap<Long, StrokeLineBounds> {
         if (document == null) return mutableMapOf()
         return strokeBoundsByDocument.getOrPut(document) { mutableMapOf() }
@@ -56,9 +62,15 @@ class DrawingStrokeStore(
         strokesByDocument[document] = strokes
     }
 
+    fun setRasterFills(document: Document?, rasterFills: MutableList<RasterFillPath>) {
+        if (document == null) return
+        rasterFillsByDocument[document] = rasterFills
+    }
+
     fun clearDocument(document: Document?) {
         if (document == null) return
         strokesByDocument[document] = mutableListOf()
+        rasterFillsByDocument[document] = mutableListOf()
         strokeBoundsByDocument[document] = mutableMapOf()
         strokeGeometryByDocument[document] = mutableMapOf()
     }
@@ -71,6 +83,7 @@ class DrawingStrokeStore(
         if (filePath.isNullOrEmpty() || document == null) return mutableListOf()
 
         val savedFromState = stateService.getStrokes(filePath)
+        val savedRasterFills = stateService.getRasterFills(filePath)
         DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes file=$filePath saved=${savedFromState.size}")
         val loaded = savedFromState.map { saved ->
             StrokePath(
@@ -122,17 +135,38 @@ class DrawingStrokeStore(
             )
         }.toMutableList()
 
+        val loadedRasterFills = savedRasterFills.map { saved ->
+            val anchor = saved.anchor.toAnchor()
+            normalizeAnchor(document, anchor)
+            RasterFillPath(
+                id = if (saved.id != 0L) saved.id else nextStrokeObjectGroupId(),
+                color = Color(saved.color, true),
+                anchor = anchor,
+                width = saved.width,
+                height = saved.height,
+                pngBase64 = saved.pngBase64,
+                objectGroupId = saved.objectGroupId
+            )
+        }.filter { fill ->
+            fill.width > 0 && fill.height > 0 && fill.pngBase64.isNotBlank()
+        }.toMutableList()
+
         strokesByDocument[document] = loaded
-        DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes mapped=${loaded.size} file=$filePath")
+        rasterFillsByDocument[document] = loadedRasterFills
+        DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes mapped=${loaded.size} rasterFills=${loadedRasterFills.size} file=$filePath")
         return loaded
     }
 
     fun persistStrokes(filePath: String?, strokes: List<StrokePath>) {
+        persistDrawing(filePath, strokes, emptyList())
+    }
+
+    fun persistDrawing(filePath: String?, strokes: List<StrokePath>, rasterFills: List<RasterFillPath>) {
         if (filePath.isNullOrEmpty()) {
-            DrawingDiagnosticLog.warn("STORE", "persistStrokes skipped empty filePath strokes=${strokes.size}")
+            DrawingDiagnosticLog.warn("STORE", "persistDrawing skipped empty filePath strokes=${strokes.size} rasterFills=${rasterFills.size}")
             return
         }
-        DrawingDiagnosticLog.info("STORE", "persistStrokes file=$filePath strokes=${strokes.size} first=${DrawingDiagnosticLog.strokeSummary(strokes.firstOrNull())}")
+        DrawingDiagnosticLog.info("STORE", "persistDrawing file=$filePath strokes=${strokes.size} rasterFills=${rasterFills.size} first=${DrawingDiagnosticLog.strokeSummary(strokes.firstOrNull())}")
 
         val saved = strokes.map { stroke ->
             SavedStroke(
@@ -164,7 +198,50 @@ class DrawingStrokeStore(
                 annotationBoundsHeight = stroke.annotationBounds?.height ?: 0
             )
         }
-        DrawingDiagnosticLog.info("STORE", "persistStrokes savedPayload=${saved.size} pointCounts=${saved.joinToString(",") { it.points.size.toString() }}")
-        stateService.setStrokes(filePath, saved)
+        val savedRasterFills = rasterFills.map { fill ->
+            SavedRasterFill(
+                id = fill.id,
+                color = fill.color.rgb,
+                anchor = fill.anchor.toSavedPoint(),
+                width = fill.width,
+                height = fill.height,
+                pngBase64 = fill.pngBase64,
+                objectGroupId = fill.objectGroupId
+            )
+        }
+        DrawingDiagnosticLog.info("STORE", "persistDrawing savedPayload=${saved.size} rasterPayload=${savedRasterFills.size} pointCounts=${saved.joinToString(",") { it.points.size.toString() }}")
+        stateService.setDrawing(filePath, saved, savedRasterFills)
+    }
+
+    private fun SavedPoint.toAnchor(): AnchorPoint {
+        return AnchorPoint(
+            line = line,
+            column = column,
+            dx = dx,
+            dy = dy,
+            offset = offset,
+            outsideCode = outsideCode,
+            afterLineEndPx = afterLineEndPx,
+            foldHiddenHeightAbove = if (anchorStorageVersion >= 3) {
+                foldHiddenHeightAbove
+            } else {
+                UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
+            }
+        )
+    }
+
+    private fun AnchorPoint.toSavedPoint(): SavedPoint {
+        return SavedPoint(
+            anchorStorageVersion = 3,
+            line = line,
+            column = column,
+            dx = dx,
+            dy = dy,
+            offset = offset,
+            outsideCode = outsideCode,
+            afterLineEndPx = afterLineEndPx,
+            foldHiddenHeightAbove = foldHiddenHeightAbove,
+            x = 0
+        )
     }
 }

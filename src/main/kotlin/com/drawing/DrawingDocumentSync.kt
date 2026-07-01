@@ -13,6 +13,7 @@ class DrawingDocumentSync(
     private val currentEditor: () -> Editor?,
     private val currentFilePath: () -> String?,
     private val currentStrokes: () -> List<StrokePath>,
+    private val currentRasterFills: () -> List<RasterFillPath> = { emptyList() },
     private val onDocumentStrokesRemapped: (Document) -> Unit,
     private val repaintCanvas: () -> Unit
 ) {
@@ -35,7 +36,12 @@ class DrawingDocumentSync(
                     event = event,
                     strokes = strokes
                 )
+                for (fill in strokeStore.currentRasterFills(document)) {
+                    coordinateMapper.remapAnchorForDocumentChange(document, event, fill.anchor)
+                }
+                val fills = strokeStore.currentRasterFills(document)
                 shiftRigidStrokesOutOfCodeText(strokes)
+                shiftRasterFillsOutOfCodeText(fills)
                 onDocumentStrokesRemapped(document)
                 schedulePersistCurrentStrokes()
                 repaintCanvas()
@@ -70,7 +76,8 @@ class DrawingDocumentSync(
         }
         val migrated = migrateFreehandStrokes(loaded)
         val shifted = shiftRigidStrokesOutOfCodeText(loaded)
-        if (migrated || shifted) {
+        val shiftedRasterFills = shiftRasterFillsOutOfCodeText(strokeStore.currentRasterFills(document))
+        if (migrated || shifted || shiftedRasterFills) {
             schedulePersistCurrentStrokes()
         }
         onDocumentStrokesRemapped(document)
@@ -92,7 +99,7 @@ class DrawingDocumentSync(
 
     fun persistCurrentStrokes() {
         cancelPendingPersistence()
-        strokeStore.persistStrokes(currentFilePath(), currentStrokes())
+        strokeStore.persistDrawing(currentFilePath(), currentStrokes(), currentRasterFills())
     }
 
     private fun migrateFreehandStrokes(strokes: List<StrokePath>): Boolean {
@@ -124,8 +131,28 @@ class DrawingDocumentSync(
         return shifted
     }
 
+    private fun shiftRasterFillsOutOfCodeText(fills: List<RasterFillPath>): Boolean {
+        var shifted = false
+        for (group in fills.groupBy(::rasterFillGroupKey).values) {
+            val shiftX = group.maxOfOrNull { fill ->
+                coordinateMapper.requiredShiftOutOfCodeText(fill)
+            } ?: 0
+            if (shiftX <= 0) continue
+
+            for (fill in group) {
+                coordinateMapper.shiftRasterFillHorizontally(fill, shiftX)
+            }
+            shifted = true
+        }
+        return shifted
+    }
+
     private fun objectGroupKey(stroke: StrokePath): Long {
         return if (stroke.objectGroupId != 0L) stroke.objectGroupId else -stroke.id
+    }
+
+    private fun rasterFillGroupKey(fill: RasterFillPath): Long {
+        return if (fill.objectGroupId != 0L) fill.objectGroupId else -fill.id
     }
 }
 

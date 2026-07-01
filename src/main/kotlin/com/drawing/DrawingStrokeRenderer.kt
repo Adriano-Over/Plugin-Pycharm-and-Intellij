@@ -6,6 +6,7 @@ import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.Polygon
 import java.awt.Rectangle
+import java.awt.RenderingHints
 import java.awt.geom.Path2D
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -119,14 +120,31 @@ open class DrawingStrokeRenderer(
 
         if (stroke.filled) {
             val polygon = geometry.polygon ?: return
+            val fillColor = if (preview) {
+                Color(alphaColor.red, alphaColor.green, alphaColor.blue, 140)
+            } else {
+                Color(alphaColor.red, alphaColor.green, alphaColor.blue, 255)
+            }
+            val drawOutline = stroke.width > FILL_REGION_STROKE_WIDTH_MAX
+            val previousAntialias = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING)
+            if (!drawOutline) {
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF)
+            }
+            g.color = fillColor
             g.fillPolygon(polygon)
-            g.color = Color(alphaColor.red, alphaColor.green, alphaColor.blue, 220)
-            g.stroke = BasicStroke(
-                max(1.5f, stroke.width / 2f),
-                BasicStroke.CAP_ROUND,
-                BasicStroke.JOIN_ROUND
-            )
-            g.drawPolygon(polygon)
+            if (!drawOutline) {
+                if (previousAntialias != null) {
+                    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, previousAntialias)
+                }
+            } else {
+                g.color = Color(fillColor.red, fillColor.green, fillColor.blue, 220)
+                g.stroke = BasicStroke(
+                    max(1.5f, stroke.width / 2f),
+                    BasicStroke.CAP_ROUND,
+                    BasicStroke.JOIN_ROUND
+                )
+                g.drawPolygon(polygon)
+            }
             return
         }
 
@@ -417,6 +435,10 @@ open class DrawingStrokeRenderer(
 
         val cosine = ((aX * bX) + (aY * bY)) / (aLength * bLength)
         return cosine < 0.72
+    }
+
+    private companion object {
+        private const val FILL_REGION_STROKE_WIDTH_MAX = 1.01f
     }
 }
 

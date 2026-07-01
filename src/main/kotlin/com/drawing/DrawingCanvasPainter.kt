@@ -19,9 +19,12 @@ class DrawingCanvasPainter(
     private val canvas: JPanel,
     private val editorProvider: () -> Editor?,
     private val currentStrokesProvider: () -> List<StrokePath>,
+    private val currentRasterFillsProvider: () -> List<RasterFillPath> = { emptyList() },
     private val shapePreviewProvider: () -> StrokePath?,
     private val collapsedFoldRegionsProvider: () -> List<CollapsedFoldRegionSnapshot> = { emptyList() },
     private val selectedStrokeIdsProvider: () -> Set<Long> = { emptySet() },
+    private val selectedRasterFillIdsProvider: () -> Set<Long> = { emptySet() },
+    private val selectionMarqueeProvider: () -> Rectangle? = { null },
     private val gridEnabledProvider: () -> Boolean,
     private val currentToolProvider: () -> DrawingToolMode,
     private val toolPreviewPointProvider: () -> Point?,
@@ -64,6 +67,8 @@ class DrawingCanvasPainter(
         gContent.translate(contentOrigin.x.toDouble(), contentOrigin.y.toDouble())
 
         try {
+            paintRasterFills(gContent, contentClip, collapsedFoldRegions)
+
             for (stroke in currentStrokesProvider()) {
                 if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(stroke, collapsedFoldRegions)) {
                     continue
@@ -111,6 +116,7 @@ class DrawingCanvasPainter(
             gContent.dispose()
         }
 
+        paintSelectionMarquee(g)
         paintToolPreview(g)
     }
 
@@ -137,6 +143,8 @@ class DrawingCanvasPainter(
         val visibleLineRange = DrawingViewportTools.resolveVisibleLineRangeInContent(currentEditor, clip)
         val boundsMap = strokeWorkspace.currentStrokeBounds()
         val renderedSemanticAnnotationGroups = linkedSetOf<Long>()
+        paintRasterFills(g, clip, collapsedFoldRegionsProvider())
+
         for (stroke in currentStrokesProvider()) {
             val bounds = boundsMap[stroke.id]
                 ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
@@ -178,7 +186,71 @@ class DrawingCanvasPainter(
             }
         }
 
+        paintSelectionMarqueeInEditorContent(g, currentEditor)
         paintToolPreviewInEditorContent(g, currentEditor)
+    }
+
+    private fun paintSelectionMarquee(g: Graphics2D) {
+        val bounds = selectionMarqueeProvider() ?: return
+        if (bounds.width <= 0 || bounds.height <= 0) return
+
+        val gSelection = g.create() as Graphics2D
+        try {
+            gSelection.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            gSelection.color = Color(40, 160, 220, 35)
+            gSelection.fill(bounds)
+            gSelection.stroke = BasicStroke(
+                1.4f,
+                BasicStroke.CAP_ROUND,
+                BasicStroke.JOIN_ROUND,
+                10f,
+                floatArrayOf(7f, 5f),
+                0f
+            )
+            gSelection.color = Color(115, 220, 255, 230)
+            gSelection.draw(bounds)
+        } finally {
+            gSelection.dispose()
+        }
+    }
+
+    private fun paintSelectionMarqueeInEditorContent(g: Graphics2D, editor: Editor) {
+        val canvasBounds = selectionMarqueeProvider() ?: return
+        val contentBounds = SwingUtilities.convertRectangle(canvas, canvasBounds, editor.contentComponent)
+        val gSelection = g.create() as Graphics2D
+        try {
+            gSelection.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            gSelection.color = Color(40, 160, 220, 35)
+            gSelection.fill(contentBounds)
+            gSelection.stroke = BasicStroke(
+                1.4f,
+                BasicStroke.CAP_ROUND,
+                BasicStroke.JOIN_ROUND,
+                10f,
+                floatArrayOf(7f, 5f),
+                0f
+            )
+            gSelection.color = Color(115, 220, 255, 230)
+            gSelection.draw(contentBounds)
+        } finally {
+            gSelection.dispose()
+        }
+    }
+
+    private fun paintRasterFills(
+        g: Graphics2D,
+        visibleContentClip: Rectangle,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>
+    ) {
+        for (fill in currentRasterFillsProvider()) {
+            if (DrawingViewportTools.isRasterFillHiddenByCollapsedFold(fill, collapsedRegions)) {
+                continue
+            }
+            val bounds = strokeWorkspace.rasterFillContentBounds(fill) ?: continue
+            if (!bounds.intersects(visibleContentClip)) continue
+            val image = runCatching { strokeWorkspace.rasterFillImage(fill) }.getOrNull() ?: continue
+            g.drawImage(image, bounds.x, bounds.y, null)
+        }
     }
 
     private fun paintCollapsedFoldMarkers(
@@ -304,16 +376,24 @@ class DrawingCanvasPainter(
 
     private fun paintSelectionHighlight(g: Graphics2D, visibleContentClip: Rectangle) {
         val selectedIds = selectedStrokeIdsProvider()
-        if (selectedIds.isEmpty()) return
+        val selectedRasterFillIds = selectedRasterFillIdsProvider()
+        if (selectedIds.isEmpty() && selectedRasterFillIds.isEmpty()) return
 
-        val selectedBounds = currentStrokesProvider()
+        val strokeBounds = currentStrokesProvider()
             .asSequence()
             .filter { it.id in selectedIds }
             .mapNotNull { strokeWorkspace.getOrBuildStrokeGeometryContent(it)?.bounds }
             .fold(null as Rectangle?) { union, bounds ->
                 if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
             }
-            ?: return
+        val rasterBounds = currentRasterFillsProvider()
+            .asSequence()
+            .filter { it.id in selectedRasterFillIds }
+            .mapNotNull { strokeWorkspace.rasterFillContentBounds(it) }
+            .fold(null as Rectangle?) { union, bounds ->
+                if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
+            }
+        val selectedBounds = DrawingViewportTools.unionRectangles(strokeBounds, rasterBounds) ?: return
 
         selectedBounds.grow(8, 8)
         if (!selectedBounds.intersects(visibleContentClip)) return

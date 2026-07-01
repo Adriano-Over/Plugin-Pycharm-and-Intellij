@@ -1,6 +1,7 @@
 package com.drawing
 
 import com.intellij.openapi.editor.Document
+import java.awt.Rectangle
 
 class DrawingStrokeWorkspace(
     private val currentDocument: () -> Document?,
@@ -8,8 +9,14 @@ class DrawingStrokeWorkspace(
     private val coordinateMapper: DrawingCoordinateMapper,
     private val strokeRenderer: DrawingStrokeRenderer
 ) {
+    private val rasterFillImageCache = RasterFillImageCache()
+
     fun currentStrokes(): MutableList<StrokePath> {
         return strokeStore.currentStrokes(currentDocument())
+    }
+
+    fun currentRasterFills(): MutableList<RasterFillPath> {
+        return strokeStore.currentRasterFills(currentDocument())
     }
 
     fun currentStrokeBounds(): MutableMap<Long, StrokeLineBounds> {
@@ -24,8 +31,13 @@ class DrawingStrokeWorkspace(
         strokeStore.setStrokes(document, strokes)
     }
 
+    fun setRasterFills(document: Document, rasterFills: MutableList<RasterFillPath>) {
+        strokeStore.setRasterFills(document, rasterFills)
+    }
+
     fun clearDocument(document: Document) {
         strokeStore.clearDocument(document)
+        rasterFillImageCache.clear()
     }
 
     fun addStroke(stroke: StrokePath) {
@@ -33,6 +45,18 @@ class DrawingStrokeWorkspace(
         updateStrokeBounds(stroke)
         invalidateStrokeGeometry(stroke)
     }
+
+    fun addRasterFill(fill: RasterFillPath) {
+        currentRasterFills().add(fill)
+    }
+
+    fun rasterFillContentBounds(fill: RasterFillPath): Rectangle? {
+        if (fill.width <= 0 || fill.height <= 0) return null
+        val topLeft = coordinateMapper.toContentPoint(fill.anchor.copy()) ?: return null
+        return Rectangle(topLeft.x, topLeft.y, fill.width, fill.height)
+    }
+
+    fun rasterFillImage(fill: RasterFillPath) = rasterFillImageCache.get(fill)
 
     fun rebuildStrokeBounds(document: Document) {
         val rebuilt = mutableMapOf<Long, StrokeLineBounds>()

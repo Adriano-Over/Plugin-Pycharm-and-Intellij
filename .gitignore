@@ -2,6 +2,8 @@
 .gradle/
 build/
 out/
+.intellijPlatform/
+.kotlin/
 
 # IntelliJ IDEA / JetBrains IDE project files
 .idea/
@@ -17,6 +19,8 @@ out/
 
 # Logs
 *.log
+hs_err_pid*.log
+replay_pid*.log
 
 # OS files
 .DS_Store

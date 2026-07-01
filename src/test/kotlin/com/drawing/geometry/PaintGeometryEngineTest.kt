@@ -2,6 +2,7 @@ package com.drawing.geometry
 
 import com.drawing.AnchorPoint
 import com.drawing.PaintGeometryEngine
+import com.drawing.RasterFillCodec
 import com.drawing.ShapeKind
 import com.drawing.ShapeStrokeFactory
 import com.drawing.StrokePath
@@ -48,7 +49,7 @@ class PaintGeometryEngineTest {
     }
 
     @Test
-    fun `fill returns dense strokes inside closed region`() {
+    fun `fill returns merged filled strokes inside closed region`() {
         val box = closedStroke(
             Point(20, 20),
             Point(80, 20),
@@ -66,10 +67,141 @@ class PaintGeometryEngineTest {
         )
 
         assertFalse(result.isEmpty(), "Closed regions should produce fill strokes")
+        assertTrue(result.all { it.filled }, "Fill output should render as filled regions instead of pen stripes")
         assertTrue(
-            result.all { it.points.size >= 2 },
-            "Every generated fill stroke should contain at least two points"
+            result.all { it.points.size >= 4 },
+            "Every generated fill stroke should contain a closed polygon"
         )
+        assertTrue(result.size < 20, "Simple closed regions should be merged into a compact fill payload")
+    }
+
+    @Test
+    fun `fill crops huge panels to nearby drawing bounds`() {
+        val box = closedStroke(
+            Point(20, 20),
+            Point(80, 20),
+            Point(80, 80),
+            Point(20, 80),
+            Point(20, 20)
+        )
+
+        val result = PaintGeometryEngine.fillAt(
+            strokes = listOf(box),
+            seedPoint = Point(50, 50),
+            fillColor = Color.GREEN,
+            panelBounds = Rectangle(0, 0, 10_000, 10_000),
+            toViewPoint = toViewPoint
+        )
+
+        assertFalse(result.isEmpty(), "Fill should use local drawing bounds instead of rejecting huge editor panels")
+        assertTrue(result.all { it.filled })
+    }
+
+    @Test
+    fun `raster fill returns one cropped image inside closed region`() {
+        val box = closedStroke(
+            Point(20, 20),
+            Point(80, 20),
+            Point(80, 80),
+            Point(20, 80),
+            Point(20, 20)
+        )
+
+        val result = PaintGeometryEngine.fillRasterAt(
+            strokes = listOf(box),
+            existingRasterFills = emptyList(),
+            seedPoint = Point(50, 50),
+            fillColor = Color.GREEN,
+            panelBounds = Rectangle(0, 0, 100, 100),
+            toViewPoint = toViewPoint,
+            toAnchor = toAnchor
+        )
+
+        assertTrue(result != null, "Closed regions should produce one raster fill object")
+        val fill = result!!
+        val image = RasterFillCodec.decodePngBase64(fill.pngBase64)
+        assertEquals(fill.width, image.width)
+        assertEquals(fill.height, image.height)
+        assertTrue(fill.width in 40..74, "Raster fill should be cropped to the filled region plus a small outline overlap")
+        assertTrue(fill.height in 40..74, "Raster fill should be cropped to the filled region plus a small outline overlap")
+        assertEquals(Color.GREEN.rgb, image.getRGB(image.width / 2, image.height / 2))
+    }
+
+    @Test
+    fun `raster fill overlaps slightly under outline to avoid fringe gaps`() {
+        val box = closedStroke(
+            Point(20, 20),
+            Point(80, 20),
+            Point(80, 80),
+            Point(20, 80),
+            Point(20, 20)
+        )
+
+        val result = PaintGeometryEngine.fillRasterAt(
+            strokes = listOf(box),
+            existingRasterFills = emptyList(),
+            seedPoint = Point(50, 50),
+            fillColor = Color.GREEN,
+            panelBounds = Rectangle(0, 0, 100, 100),
+            toViewPoint = toViewPoint,
+            toAnchor = toAnchor
+        )
+
+        requireNotNull(result)
+        val image = RasterFillCodec.decodePngBase64(result.pngBase64)
+        assertEquals(Color.GREEN.rgb, image.getRGB(0, image.height / 2), "Left edge should overlap under the outline")
+        assertEquals(Color.GREEN.rgb, image.getRGB(image.width - 1, image.height / 2), "Right edge should overlap under the outline")
+        assertEquals(Color.GREEN.rgb, image.getRGB(image.width / 2, 0), "Top edge should overlap under the outline")
+        assertEquals(Color.GREEN.rgb, image.getRGB(image.width / 2, image.height - 1), "Bottom edge should overlap under the outline")
+    }
+
+    @Test
+    fun `raster fill ignores hidden semantic text support strokes`() {
+        val box = closedStroke(
+            Point(20, 20),
+            Point(100, 20),
+            Point(100, 100),
+            Point(20, 100),
+            Point(20, 20)
+        )
+        val semanticTextSupport = StrokePath(
+            color = Color.RED,
+            width = 6f,
+            points = mutableListOf(anchor(45, 55), anchor(85, 55)),
+            kind = ShapeKind.TEXT,
+            annotationText = ""
+        )
+
+        val result = PaintGeometryEngine.fillRasterAt(
+            strokes = listOf(box, semanticTextSupport),
+            existingRasterFills = emptyList(),
+            seedPoint = Point(50, 50),
+            fillColor = Color.GREEN,
+            panelBounds = Rectangle(0, 0, 140, 140),
+            toViewPoint = toViewPoint,
+            toAnchor = toAnchor
+        )
+
+        requireNotNull(result)
+        val image = RasterFillCodec.decodePngBase64(result.pngBase64)
+        val centerY = 55 - result.anchor.dy
+        val sampledColors = (0 until image.width).map { x -> image.getRGB(x, centerY.coerceIn(0, image.height - 1)) }.toSet()
+        assertEquals(setOf(Color.GREEN.rgb), sampledColors, "Hidden semantic text support strokes should not leave red pixels or split the fill")
+    }
+
+    @Test
+    fun `raster fill returns null when region leaks to edge`() {
+        val result = PaintGeometryEngine.fillRasterAt(
+            strokes = emptyList(),
+            existingRasterFills = emptyList(),
+            seedPoint = Point(50, 50),
+            fillColor = Color.BLUE,
+            panelBounds = Rectangle(0, 0, 100, 100),
+            toViewPoint = toViewPoint,
+            toAnchor = toAnchor
+        )
+
+        assertEquals(null, result, "Open regions should not create raster fills")
     }
 
     @Test

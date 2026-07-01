@@ -9,18 +9,22 @@ import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.geom.Path2D
 import java.awt.image.BufferedImage
+import kotlin.math.ceil
 import kotlin.math.max
 
 internal object FillGeometryEngine {
 
-    private const val MAX_FILL_SEGMENT_WIDTH_PX = 9
-    private const val FILL_STROKE_WIDTH_PX = 3.0f
+    private const val FILL_STROKE_WIDTH_PX = 1.0f
+    private const val FILL_BOUNDS_PADDING_PX = 12
+    private const val RASTER_FILL_EDGE_OVERLAP_PX = 2
+    private const val MAX_FILLED_PIXELS = 900_000
+    private const val MAX_MERGED_FILL_RECTS = 3_000
 
     /**
      * Safety cap for the temporary flood-fill image.
      * A very large editor viewport can otherwise allocate huge arrays and freeze the UI.
      */
-    private const val MAX_FILL_SNAPSHOT_PIXELS = 12_000_000
+    private const val MAX_FILL_SNAPSHOT_PIXELS = 2_000_000
 
     fun fillAt(
         strokes: List<StrokePath>,
@@ -29,15 +33,20 @@ internal object FillGeometryEngine {
         panelBounds: Rectangle,
         toViewPoint: (AnchorPoint) -> Point?
     ): MutableList<StrokePath> {
-        if (panelBounds.width <= 0 || panelBounds.height <= 0) return mutableListOf()
+        val snapshotBounds = resolveSnapshotBounds(
+            strokes = strokes,
+            seedPoint = seedPoint,
+            panelBounds = panelBounds,
+            toViewPoint = toViewPoint
+        ) ?: return mutableListOf()
 
-        val width = panelBounds.width
-        val height = panelBounds.height
+        val width = snapshotBounds.width
+        val height = snapshotBounds.height
         val pixelCount = width.toLong() * height.toLong()
         if (pixelCount > MAX_FILL_SNAPSHOT_PIXELS) return mutableListOf()
 
-        val offsetX = panelBounds.x
-        val offsetY = panelBounds.y
+        val offsetX = snapshotBounds.x
+        val offsetY = snapshotBounds.y
         val seedX = seedPoint.x - offsetX
         val seedY = seedPoint.y - offsetY
 
@@ -59,17 +68,18 @@ internal object FillGeometryEngine {
             image = image,
             startX = seedX,
             startY = seedY,
-            targetArgb = targetArgb
+            targetArgb = targetArgb,
+            maxFilledPixels = MAX_FILLED_PIXELS
         )
 
-        if (result.filledPixelCount == 0) return mutableListOf()
+        if (result.filledPixelCount == 0 || result.aborted) return mutableListOf()
 
         // The editor background is transparent in this snapshot. If the region reaches
         // the snapshot edge, the user clicked an open/background area instead of a
         // closed region. Returning empty protects against accidental whole-editor fills.
         if (isTransparent(targetArgb) && result.touchesEdge) return mutableListOf()
 
-        return buildDenseFillStrokes(
+        return buildMergedFillStrokes(
             visited = result.visited,
             width = width,
             height = height,
@@ -79,8 +89,179 @@ internal object FillGeometryEngine {
         )
     }
 
+    fun fillRasterAt(
+        strokes: List<StrokePath>,
+        existingRasterFills: List<RasterFillPath>,
+        seedPoint: Point,
+        fillColor: Color,
+        panelBounds: Rectangle,
+        toViewPoint: (AnchorPoint) -> Point?,
+        toAnchor: (Point) -> AnchorPoint?
+    ): RasterFillPath? {
+        val snapshotBounds = resolveSnapshotBounds(
+            strokes = strokes,
+            rasterFills = existingRasterFills,
+            seedPoint = seedPoint,
+            panelBounds = panelBounds,
+            toViewPoint = toViewPoint
+        ) ?: return null
+
+        val width = snapshotBounds.width
+        val height = snapshotBounds.height
+        val pixelCount = width.toLong() * height.toLong()
+        if (pixelCount > MAX_FILL_SNAPSHOT_PIXELS) return null
+
+        val offsetX = snapshotBounds.x
+        val offsetY = snapshotBounds.y
+        val seedX = seedPoint.x - offsetX
+        val seedY = seedPoint.y - offsetY
+
+        if (seedX !in 0 until width || seedY !in 0 until height) return null
+
+        val image = renderColorSnapshot(
+            strokes = strokes,
+            rasterFills = existingRasterFills,
+            width = width,
+            height = height,
+            offsetX = offsetX,
+            offsetY = offsetY,
+            toViewPoint = toViewPoint
+        )
+
+        val targetArgb = image.getRGB(seedX, seedY)
+        if (isSameVisibleColor(targetArgb, fillColor.rgb)) return null
+
+        val result = floodFillSameColor(
+            image = image,
+            startX = seedX,
+            startY = seedY,
+            targetArgb = targetArgb,
+            maxFilledPixels = MAX_FILLED_PIXELS
+        )
+
+        if (result.filledPixelCount == 0 || result.aborted || result.touchesEdge) return null
+
+        val outputBounds = Rectangle(result.bounds)
+        outputBounds.grow(RASTER_FILL_EDGE_OVERLAP_PX, RASTER_FILL_EDGE_OVERLAP_PX)
+        outputBounds.x = outputBounds.x.coerceAtLeast(0)
+        outputBounds.y = outputBounds.y.coerceAtLeast(0)
+        val maxOutputX = (result.bounds.x + result.bounds.width + RASTER_FILL_EDGE_OVERLAP_PX).coerceAtMost(width)
+        val maxOutputY = (result.bounds.y + result.bounds.height + RASTER_FILL_EDGE_OVERLAP_PX).coerceAtMost(height)
+        outputBounds.width = (maxOutputX - outputBounds.x).coerceAtLeast(1)
+        outputBounds.height = (maxOutputY - outputBounds.y).coerceAtLeast(1)
+
+        val expandedVisited = expandVisitedMask(
+            visited = result.visited,
+            width = width,
+            height = height,
+            radius = RASTER_FILL_EDGE_OVERLAP_PX
+        )
+
+        val output = BufferedImage(outputBounds.width, outputBounds.height, BufferedImage.TYPE_INT_ARGB)
+        for (y in outputBounds.y until outputBounds.y + outputBounds.height) {
+            val rowStart = y * width
+            for (x in outputBounds.x until outputBounds.x + outputBounds.width) {
+                if (expandedVisited[rowStart + x]) {
+                    output.setRGB(x - outputBounds.x, y - outputBounds.y, fillColor.rgb)
+                }
+            }
+        }
+
+        val anchorPoint = Point(outputBounds.x + offsetX, outputBounds.y + offsetY)
+        val anchor = toAnchor(anchorPoint) ?: return null
+        return RasterFillPath(
+            color = fillColor,
+            anchor = anchor,
+            width = output.width,
+            height = output.height,
+            pngBase64 = RasterFillCodec.encodePngBase64(output)
+        )
+    }
+
+    private fun expandVisitedMask(
+        visited: BooleanArray,
+        width: Int,
+        height: Int,
+        radius: Int
+    ): BooleanArray {
+        if (radius <= 0) return visited
+        val expanded = visited.copyOf()
+        for (y in 0 until height) {
+            val rowStart = y * width
+            for (x in 0 until width) {
+                if (!visited[rowStart + x]) continue
+                for (dy in -radius..radius) {
+                    val ny = y + dy
+                    if (ny !in 0 until height) continue
+                    for (dx in -radius..radius) {
+                        val nx = x + dx
+                        if (nx !in 0 until width) continue
+                        expanded[ny * width + nx] = true
+                    }
+                }
+            }
+        }
+        return expanded
+    }
+
+    private fun resolveSnapshotBounds(
+        strokes: List<StrokePath>,
+        rasterFills: List<RasterFillPath> = emptyList(),
+        seedPoint: Point,
+        panelBounds: Rectangle,
+        toViewPoint: (AnchorPoint) -> Point?
+    ): Rectangle? {
+        if (panelBounds.width <= 0 || panelBounds.height <= 0) return null
+
+        val drawingBounds = (strokes.mapNotNull { stroke -> strokeViewBounds(stroke, toViewPoint) } +
+            rasterFills.mapNotNull { fill -> rasterFillViewBounds(fill, toViewPoint) })
+            .fold(null as Rectangle?) { union, bounds ->
+                union?.apply { add(bounds) } ?: Rectangle(bounds)
+            }
+            ?: return null
+
+        if (!drawingBounds.contains(seedPoint)) return null
+
+        val snapshotBounds = drawingBounds.intersection(panelBounds)
+        return if (snapshotBounds.width > 0 && snapshotBounds.height > 0) snapshotBounds else null
+    }
+
+    private fun rasterFillViewBounds(
+        fill: RasterFillPath,
+        toViewPoint: (AnchorPoint) -> Point?
+    ): Rectangle? {
+        if (fill.width <= 0 || fill.height <= 0) return null
+        val topLeft = toViewPoint(fill.anchor.copy()) ?: return null
+        return Rectangle(topLeft.x, topLeft.y, fill.width, fill.height)
+    }
+
+    private fun strokeViewBounds(
+        stroke: StrokePath,
+        toViewPoint: (AnchorPoint) -> Point?
+    ): Rectangle? {
+        val points = stroke.points.mapNotNull(toViewPoint)
+        if (points.isEmpty()) return null
+
+        var minX = Int.MAX_VALUE
+        var minY = Int.MAX_VALUE
+        var maxX = Int.MIN_VALUE
+        var maxY = Int.MIN_VALUE
+        for (point in points) {
+            minX = minOf(minX, point.x)
+            minY = minOf(minY, point.y)
+            maxX = maxOf(maxX, point.x)
+            maxY = maxOf(maxY, point.y)
+        }
+
+        val bounds = Rectangle(minX, minY, (maxX - minX).coerceAtLeast(1), (maxY - minY).coerceAtLeast(1))
+        val padding = max(FILL_BOUNDS_PADDING_PX, ceil(stroke.width.toDouble()).toInt() + FILL_BOUNDS_PADDING_PX)
+        bounds.grow(padding, padding)
+        return bounds
+    }
+
     private fun renderColorSnapshot(
         strokes: List<StrokePath>,
+        rasterFills: List<RasterFillPath> = emptyList(),
         width: Int,
         height: Int,
         offsetX: Int,
@@ -97,7 +278,16 @@ internal object FillGeometryEngine {
             g.fillRect(0, 0, width, height)
             g.composite = AlphaComposite.SrcOver
 
+            for (fill in rasterFills) {
+                val topLeft = toViewPoint(fill.anchor.copy()) ?: continue
+                val image = runCatching { RasterFillCodec.decodePngBase64(fill.pngBase64) }.getOrNull() ?: continue
+                g.drawImage(image, topLeft.x - offsetX, topLeft.y - offsetY, null)
+            }
+
             for (stroke in strokes) {
+                if (stroke.annotationText != null) {
+                    continue
+                }
                 val points = stroke.points.mapNotNull(toViewPoint)
                 if (points.isEmpty()) continue
 
@@ -188,7 +378,8 @@ internal object FillGeometryEngine {
         image: BufferedImage,
         startX: Int,
         startY: Int,
-        targetArgb: Int
+        targetArgb: Int,
+        maxFilledPixels: Int
     ): FloodFillResult {
         val width = image.width
         val height = image.height
@@ -198,8 +389,14 @@ internal object FillGeometryEngine {
         var tail = 0
         var filledPixelCount = 0
         var touchesEdge = false
+        var aborted = false
+        var minX = startX
+        var maxX = startX
+        var minY = startY
+        var maxY = startY
 
         fun enqueue(x: Int, y: Int) {
+            if (aborted) return
             val index = y * width + x
             if (visited[index]) return
             if (image.getRGB(x, y) != targetArgb) return
@@ -207,9 +404,17 @@ internal object FillGeometryEngine {
             visited[index] = true
             queue[tail++] = index
             filledPixelCount++
+            if (filledPixelCount > maxFilledPixels) {
+                aborted = true
+                return
+            }
             if (x == 0 || y == 0 || x == width - 1 || y == height - 1) {
                 touchesEdge = true
             }
+            minX = minOf(minX, x)
+            maxX = maxOf(maxX, x)
+            minY = minOf(minY, y)
+            maxY = maxOf(maxY, y)
         }
 
         enqueue(startX, startY)
@@ -228,11 +433,13 @@ internal object FillGeometryEngine {
         return FloodFillResult(
             visited = visited,
             filledPixelCount = filledPixelCount,
-            touchesEdge = touchesEdge
+            touchesEdge = touchesEdge,
+            aborted = aborted,
+            bounds = Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1)
         )
     }
 
-    private fun buildDenseFillStrokes(
+    private fun buildMergedFillStrokes(
         visited: BooleanArray,
         width: Int,
         height: Int,
@@ -240,7 +447,32 @@ internal object FillGeometryEngine {
         offsetX: Int,
         offsetY: Int
     ): MutableList<StrokePath> {
-        val result = mutableListOf<StrokePath>()
+        val rectangles = mergeFilledRuns(
+            runsByRow = collectFilledRunsByRow(visited, width, height)
+        )
+        if (rectangles.size > MAX_MERGED_FILL_RECTS) return mutableListOf()
+        return rectangles.mapTo(mutableListOf()) { rectangle ->
+            StrokePath(
+                color = fillColor,
+                width = FILL_STROKE_WIDTH_PX,
+                points = mutableListOf(
+                    AnchorPoint(0, 0, rectangle.x + offsetX, rectangle.y + offsetY),
+                    AnchorPoint(0, 0, rectangle.x + rectangle.width + offsetX, rectangle.y + offsetY),
+                    AnchorPoint(0, 0, rectangle.x + rectangle.width + offsetX, rectangle.y + rectangle.height + offsetY),
+                    AnchorPoint(0, 0, rectangle.x + offsetX, rectangle.y + rectangle.height + offsetY)
+                ),
+                filled = true,
+                kind = null
+            )
+        }
+    }
+
+    private fun collectFilledRunsByRow(
+        visited: BooleanArray,
+        width: Int,
+        height: Int
+    ): List<List<IntRange>> {
+        val rows = MutableList(height) { mutableListOf<IntRange>() }
 
         for (y in 0 until height) {
             val rowStart = y * width
@@ -253,26 +485,37 @@ internal object FillGeometryEngine {
                 val end = x - 1
 
                 if (start <= end) {
-                    var segmentStart = start
-                    while (segmentStart <= end) {
-                        val segmentEnd = minOf(segmentStart + MAX_FILL_SEGMENT_WIDTH_PX - 1, end)
-                        result += StrokePath(
-                            color = fillColor,
-                            width = FILL_STROKE_WIDTH_PX,
-                            points = mutableListOf(
-                                AnchorPoint(0, 0, segmentStart + offsetX, y + offsetY),
-                                AnchorPoint(0, 0, segmentEnd + offsetX, y + offsetY)
-                            ),
-                            filled = false,
-                            kind = null
-                        )
-                        segmentStart = segmentEnd + 1
-                    }
+                    rows[y] += start..end
                 }
             }
         }
 
-        return result
+        return rows
+    }
+
+    private fun mergeFilledRuns(runsByRow: List<List<IntRange>>): List<Rectangle> {
+        val active = linkedMapOf<IntRange, Rectangle>()
+        val merged = mutableListOf<Rectangle>()
+
+        for ((y, runs) in runsByRow.withIndex()) {
+            val current = linkedMapOf<IntRange, Rectangle>()
+
+            for (run in runs) {
+                val continuing = active.remove(run)
+                current[run] = if (continuing != null) {
+                    continuing.apply { height += 1 }
+                } else {
+                    Rectangle(run.first, y, run.last - run.first + 1, 1)
+                }
+            }
+
+            merged += active.values
+            active.clear()
+            active.putAll(current)
+        }
+
+        merged += active.values
+        return merged
     }
 
     private fun isTransparent(argb: Int): Boolean {
@@ -287,6 +530,8 @@ internal object FillGeometryEngine {
     private data class FloodFillResult(
         val visited: BooleanArray,
         val filledPixelCount: Int,
-        val touchesEdge: Boolean
+        val touchesEdge: Boolean,
+        val aborted: Boolean,
+        val bounds: Rectangle
     )
 }

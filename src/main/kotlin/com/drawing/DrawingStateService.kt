@@ -42,9 +42,20 @@ data class SavedStroke(
     var annotationBoundsHeight: Int = 0
 )
 
+data class SavedRasterFill(
+    var id: Long = 0L,
+    var color: Int = 0,
+    var anchor: SavedPoint = SavedPoint(),
+    var width: Int = 0,
+    var height: Int = 0,
+    var pngBase64: String = "",
+    var objectGroupId: Long = 0L
+)
+
 data class SavedFileDrawing(
     var filePath: String = "",
-    var strokes: MutableList<SavedStroke> = mutableListOf()
+    var strokes: MutableList<SavedStroke> = mutableListOf(),
+    var rasterFills: MutableList<SavedRasterFill> = mutableListOf()
 )
 
 data class DrawingState(
@@ -93,7 +104,31 @@ class DrawingStateService(
             ?: mutableListOf()
     }
 
+    fun getRasterFills(filePath: String): MutableList<SavedRasterFill> {
+        val lookupKey = fileComparisonKey(filePath)
+        if (lookupKey.isEmpty()) return mutableListOf()
+
+        val matches = state.files.filter { fileComparisonKey(it.filePath) == lookupKey }
+        if (matches.size > 1) {
+            DrawingDiagnosticLog.warn(
+                category = "STATE",
+                message = "getRasterFills found duplicate file entries count=${matches.size} key=$lookupKey; loading newest"
+            )
+            compactFileEntries()
+        }
+
+        return matches.lastOrNull()
+            ?.rasterFills
+            ?.map { it.deepCopy() }
+            ?.toMutableList()
+            ?: mutableListOf()
+    }
+
     fun setStrokes(filePath: String, strokes: List<SavedStroke>) {
+        setDrawing(filePath, strokes, getRasterFills(filePath))
+    }
+
+    fun setDrawing(filePath: String, strokes: List<SavedStroke>, rasterFills: List<SavedRasterFill>) {
         val storagePath = stableStoragePath(filePath)
         val storageKey = fileComparisonKey(storagePath)
         if (storageKey.isEmpty()) return
@@ -104,11 +139,12 @@ class DrawingStateService(
                 .map { it.deepCopy() }
                 .toMutableList()
 
-            if (strokes.isNotEmpty()) {
+            if (strokes.isNotEmpty() || rasterFills.isNotEmpty()) {
                 updatedFiles.add(
                     SavedFileDrawing(
                         filePath = storagePath,
-                        strokes = strokes.map { it.deepCopy() }.toMutableList()
+                        strokes = strokes.map { it.deepCopy() }.toMutableList(),
+                        rasterFills = rasterFills.map { it.deepCopy() }.toMutableList()
                     )
                 )
             }
@@ -304,7 +340,8 @@ class DrawingStateService(
 
     private fun SavedFileDrawing.deepCopy(): SavedFileDrawing = SavedFileDrawing(
         filePath = filePath,
-        strokes = strokes.map { it.deepCopy() }.toMutableList()
+        strokes = strokes.map { it.deepCopy() }.toMutableList(),
+        rasterFills = rasterFills.map { it.deepCopy() }.toMutableList()
     )
 
     private fun SavedStroke.deepCopy(): SavedStroke = SavedStroke(
@@ -321,5 +358,15 @@ class DrawingStateService(
         annotationBoundsY = annotationBoundsY,
         annotationBoundsWidth = annotationBoundsWidth,
         annotationBoundsHeight = annotationBoundsHeight
+    )
+
+    private fun SavedRasterFill.deepCopy(): SavedRasterFill = SavedRasterFill(
+        id = id,
+        color = color,
+        anchor = anchor.copy(),
+        width = width,
+        height = height,
+        pngBase64 = pngBase64,
+        objectGroupId = objectGroupId
     )
 }

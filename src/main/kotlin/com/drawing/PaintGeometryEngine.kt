@@ -72,6 +72,26 @@ object PaintGeometryEngine {
         )
     }
 
+    fun fillRasterAt(
+        strokes: List<StrokePath>,
+        existingRasterFills: List<RasterFillPath>,
+        seedPoint: Point,
+        fillColor: Color,
+        panelBounds: Rectangle,
+        toViewPoint: (AnchorPoint) -> Point?,
+        toAnchor: (Point) -> AnchorPoint?
+    ): RasterFillPath? {
+        return FillGeometryEngine.fillRasterAt(
+            strokes = strokes,
+            existingRasterFills = existingRasterFills,
+            seedPoint = seedPoint,
+            fillColor = fillColor,
+            panelBounds = panelBounds,
+            toViewPoint = toViewPoint,
+            toAnchor = toAnchor
+        )
+    }
+
     fun areaToFilledStrokes(area: Area, color: Color, width: Float): MutableList<StrokePath> {
         return GeometryAreaUtils.areaToFilledStrokes(area, color, width)
     }

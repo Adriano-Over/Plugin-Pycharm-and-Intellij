@@ -2,6 +2,7 @@ package com.drawing
 
 import java.awt.BasicStroke
 import java.awt.Point
+import java.awt.Rectangle
 import java.awt.geom.Area
 import java.awt.geom.Ellipse2D
 import java.awt.geom.Path2D
@@ -233,7 +234,14 @@ internal object EraseGeometryEngine {
                 width = stroke.width,
                 points = segment,
                 filled = false,
-                kind = resultKind
+                kind = resultKind,
+                objectGroupId = stroke.objectGroupId,
+                rigidObjectAnchor = stroke.rigidObjectAnchor,
+                annotationText = stroke.annotationText,
+                annotationTextStyle = stroke.annotationTextStyle,
+                annotationBounds = stroke.annotationBounds?.let { Rectangle(it) },
+                foldLayoutAnchorLine = stroke.foldLayoutAnchorLine,
+                foldLayoutAnchorBaseY = stroke.foldLayoutAnchorBaseY
             )
         }
     }

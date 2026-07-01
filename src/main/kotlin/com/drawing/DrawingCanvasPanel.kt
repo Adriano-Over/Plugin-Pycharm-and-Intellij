@@ -119,6 +119,7 @@ class DrawingCanvasPanel(
         currentEditor = { editor },
         currentFilePath = { currentFile?.path },
         currentStrokes = ::currentStrokes,
+        currentRasterFills = ::currentRasterFills,
         onDocumentStrokesRemapped = { document ->
             strokeWorkspace.rebuildStrokeBounds(document)
             strokeWorkspace.resetStrokeGeometryCache(document)
@@ -157,9 +158,12 @@ class DrawingCanvasPanel(
         canvas = this,
         editorProvider = { editor },
         currentStrokesProvider = ::currentStrokes,
+        currentRasterFillsProvider = ::currentRasterFills,
         shapePreviewProvider = { shapePreview },
         collapsedFoldRegionsProvider = ::collapsedFoldRegionsSnapshot,
         selectedStrokeIdsProvider = canvasController::selectedStrokeIdsSnapshot,
+        selectedRasterFillIdsProvider = canvasController::selectedRasterFillIdsSnapshot,
+        selectionMarqueeProvider = canvasController::selectionMarqueeSnapshot,
         gridEnabledProvider = { gridEnabled },
         strokeRenderer = strokeRenderer,
         currentToolProvider = { currentTool },
@@ -502,7 +506,7 @@ class DrawingCanvasPanel(
 
     fun canUndo(): Boolean = historyStore.canUndo(editor?.document)
     fun canRedo(): Boolean = historyStore.canRedo(editor?.document)
-    fun hasDrawings(): Boolean = currentStrokes().isNotEmpty()
+    fun hasDrawings(): Boolean = currentStrokes().isNotEmpty() || currentRasterFills().isNotEmpty()
 
     private fun loadPersistedDrawColor(): Color {
         val saved = Color(drawingStateService.getSelectedColorRgb(), true)
@@ -672,6 +676,8 @@ class DrawingCanvasPanel(
     }
 
     private fun currentStrokes(): MutableList<StrokePath> = strokeWorkspace.currentStrokes()
+
+    private fun currentRasterFills(): MutableList<RasterFillPath> = strokeWorkspace.currentRasterFills()
 
     override fun isOpaque(): Boolean = false
 
