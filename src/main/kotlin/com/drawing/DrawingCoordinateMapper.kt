@@ -278,6 +278,31 @@ class DrawingCoordinateMapper(
         return requiredLeftX - minX
     }
 
+    fun requiredShiftOutOfCodeText(annotation: AnnotationPath): Int {
+        if (annotation.width <= 0 || annotation.height <= 0) return 0
+        val editor = editorProvider() ?: return 0
+        val document = editor.document
+        if (document.lineCount <= 0) return 0
+
+        val topLeft = toContentPoint(annotation.anchor.copy()) ?: return 0
+        val minX = topLeft.x
+        val topY = topLeft.y
+        val bottomY = topLeft.y + annotation.height
+        val topLine = editor.xyToLogicalPosition(Point(0, topY)).line.coerceIn(0, document.lineCount - 1)
+        val bottomLine = editor.xyToLogicalPosition(Point(0, bottomY)).line.coerceIn(0, document.lineCount - 1)
+        if (topLine > bottomLine) return 0
+
+        var requiredLeftX = Int.MIN_VALUE
+        for (line in topLine..bottomLine) {
+            val lineInfo = resolveLineInfo(editor.logicalPositionToXY(LogicalPosition(line, 0))) ?: continue
+            if (!lineInfo.hasCodeText) continue
+            requiredLeftX = max(requiredLeftX, lineInfo.lineEndX + minCodeClearancePx)
+        }
+        if (requiredLeftX == Int.MIN_VALUE || minX >= requiredLeftX) return 0
+
+        return requiredLeftX - minX
+    }
+
     fun shiftStrokeHorizontally(stroke: StrokePath, shiftX: Int) {
         if (shiftX == 0) return
         for (point in stroke.points) {
@@ -288,6 +313,11 @@ class DrawingCoordinateMapper(
     fun shiftRasterFillHorizontally(fill: RasterFillPath, shiftX: Int) {
         if (shiftX == 0) return
         fill.anchor.dx += shiftX
+    }
+
+    fun shiftAnnotationHorizontally(annotation: AnnotationPath, shiftX: Int) {
+        if (shiftX == 0) return
+        annotation.anchor.dx += shiftX
     }
 
     fun moveRasterFillByViewDelta(fill: RasterFillPath, deltaX: Int, deltaY: Int): Boolean {
@@ -304,6 +334,23 @@ class DrawingCoordinateMapper(
         fill.anchor.afterLineEndPx = movedAnchor.afterLineEndPx
         fill.anchor.foldHiddenHeightAbove = movedAnchor.foldHiddenHeightAbove
         fill.anchor.foldLayoutBaseY = movedAnchor.foldLayoutBaseY
+        return true
+    }
+
+    fun moveAnnotationByViewDelta(annotation: AnnotationPath, deltaX: Int, deltaY: Int): Boolean {
+        if (deltaX == 0 && deltaY == 0) return false
+        val topLeft = toViewPoint(annotation.anchor.copy()) ?: return false
+        val moved = Point(topLeft.x + deltaX, topLeft.y + deltaY)
+        val movedAnchor = viewPointToAnchor(moved, allowCodeArea = true) ?: return false
+        annotation.anchor.line = movedAnchor.line
+        annotation.anchor.column = movedAnchor.column
+        annotation.anchor.dx = movedAnchor.dx
+        annotation.anchor.dy = movedAnchor.dy
+        annotation.anchor.offset = movedAnchor.offset
+        annotation.anchor.outsideCode = movedAnchor.outsideCode
+        annotation.anchor.afterLineEndPx = movedAnchor.afterLineEndPx
+        annotation.anchor.foldHiddenHeightAbove = movedAnchor.foldHiddenHeightAbove
+        annotation.anchor.foldLayoutBaseY = movedAnchor.foldLayoutBaseY
         return true
     }
 

@@ -136,8 +136,10 @@ class DrawingToolWindowPanel(
     }
 
     private fun dockPinnedToolWindow() {
+        DrawingToolWindowLayout.applyRightDockDefaults(toolWindow)
         toolWindow.setType(ToolWindowType.DOCKED, null)
         toolWindow.setAutoHide(false)
+        DrawingToolWindowLayout.applyRightDockDefaults(toolWindow)
     }
 
     private fun installDragHandlerRecursively(component: Component, dragHandler: MouseAdapter) {

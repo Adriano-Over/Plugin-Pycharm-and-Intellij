@@ -52,10 +52,23 @@ data class SavedRasterFill(
     var objectGroupId: Long = 0L
 )
 
+data class SavedAnnotation(
+    var id: Long = 0L,
+    var text: String = "",
+    var color: Int = 0,
+    var anchor: SavedPoint = SavedPoint(),
+    var width: Int = 0,
+    var height: Int = 0,
+    var kind: String = AnnotationKind.TEXT.name,
+    var style: String = BalloonTextStyle.SOLID.name,
+    var objectGroupId: Long = 0L
+)
+
 data class SavedFileDrawing(
     var filePath: String = "",
     var strokes: MutableList<SavedStroke> = mutableListOf(),
-    var rasterFills: MutableList<SavedRasterFill> = mutableListOf()
+    var rasterFills: MutableList<SavedRasterFill> = mutableListOf(),
+    var annotations: MutableList<SavedAnnotation> = mutableListOf()
 )
 
 data class DrawingState(
@@ -124,11 +137,36 @@ class DrawingStateService(
             ?: mutableListOf()
     }
 
-    fun setStrokes(filePath: String, strokes: List<SavedStroke>) {
-        setDrawing(filePath, strokes, getRasterFills(filePath))
+    fun getAnnotations(filePath: String): MutableList<SavedAnnotation> {
+        val lookupKey = fileComparisonKey(filePath)
+        if (lookupKey.isEmpty()) return mutableListOf()
+
+        val matches = state.files.filter { fileComparisonKey(it.filePath) == lookupKey }
+        if (matches.size > 1) {
+            DrawingDiagnosticLog.warn(
+                category = "STATE",
+                message = "getAnnotations found duplicate file entries count=${matches.size} key=$lookupKey; loading newest"
+            )
+            compactFileEntries()
+        }
+
+        return matches.lastOrNull()
+            ?.annotations
+            ?.map { it.deepCopy() }
+            ?.toMutableList()
+            ?: mutableListOf()
     }
 
-    fun setDrawing(filePath: String, strokes: List<SavedStroke>, rasterFills: List<SavedRasterFill>) {
+    fun setStrokes(filePath: String, strokes: List<SavedStroke>) {
+        setDrawing(filePath, strokes, getRasterFills(filePath), getAnnotations(filePath))
+    }
+
+    fun setDrawing(
+        filePath: String,
+        strokes: List<SavedStroke>,
+        rasterFills: List<SavedRasterFill>,
+        annotations: List<SavedAnnotation> = emptyList()
+    ) {
         val storagePath = stableStoragePath(filePath)
         val storageKey = fileComparisonKey(storagePath)
         if (storageKey.isEmpty()) return
@@ -139,12 +177,13 @@ class DrawingStateService(
                 .map { it.deepCopy() }
                 .toMutableList()
 
-            if (strokes.isNotEmpty() || rasterFills.isNotEmpty()) {
+            if (strokes.isNotEmpty() || rasterFills.isNotEmpty() || annotations.isNotEmpty()) {
                 updatedFiles.add(
                     SavedFileDrawing(
                         filePath = storagePath,
                         strokes = strokes.map { it.deepCopy() }.toMutableList(),
-                        rasterFills = rasterFills.map { it.deepCopy() }.toMutableList()
+                        rasterFills = rasterFills.map { it.deepCopy() }.toMutableList(),
+                        annotations = annotations.map { it.deepCopy() }.toMutableList()
                     )
                 )
             }
@@ -341,7 +380,8 @@ class DrawingStateService(
     private fun SavedFileDrawing.deepCopy(): SavedFileDrawing = SavedFileDrawing(
         filePath = filePath,
         strokes = strokes.map { it.deepCopy() }.toMutableList(),
-        rasterFills = rasterFills.map { it.deepCopy() }.toMutableList()
+        rasterFills = rasterFills.map { it.deepCopy() }.toMutableList(),
+        annotations = annotations.map { it.deepCopy() }.toMutableList()
     )
 
     private fun SavedStroke.deepCopy(): SavedStroke = SavedStroke(
@@ -367,6 +407,18 @@ class DrawingStateService(
         width = width,
         height = height,
         pngBase64 = pngBase64,
+        objectGroupId = objectGroupId
+    )
+
+    private fun SavedAnnotation.deepCopy(): SavedAnnotation = SavedAnnotation(
+        id = id,
+        text = text,
+        color = color,
+        anchor = anchor.copy(),
+        width = width,
+        height = height,
+        kind = kind,
+        style = style,
         objectGroupId = objectGroupId
     )
 }

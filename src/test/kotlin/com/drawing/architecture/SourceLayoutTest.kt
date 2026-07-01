@@ -34,6 +34,8 @@ class SourceLayoutTest {
         assertTrue(pluginXml.contains("""<name>Drawing</name>"""))
         assertTrue(pluginXml.contains("""factoryClass="com.drawing.DrawingToolWindowFactory""""))
         assertTrue(pluginXml.contains("""icon="/icons/drawing-pencil.svg""""))
+        assertTrue(pluginXml.contains("""anchor="right""""))
+        assertFalse(pluginXml.contains("""secondary="true""""))
         assertTrue(Files.exists(Path.of("src", "main", "resources", "icons", "drawing-pencil.svg")))
         assertFalse(pluginXml.contains("statusBarWidgetFactory"))
         assertFalse(pluginXml.contains("DrawingStatusBarWidget"))

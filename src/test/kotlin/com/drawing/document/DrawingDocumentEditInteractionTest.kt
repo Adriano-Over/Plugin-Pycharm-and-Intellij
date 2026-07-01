@@ -1,6 +1,7 @@
 package com.drawing.document
 
 import com.drawing.AnchorPoint
+import com.drawing.AnnotationKind
 import com.drawing.DrawingCoordinateMapper
 import com.drawing.DrawingCanvasController
 import com.drawing.DrawingDocumentSync
@@ -1120,13 +1121,101 @@ class DrawingDocumentEditInteractionTest {
 
         try {
             controller.handleShapeReleased()
-            assertEquals(1, currentStrokes.size, "Balloon outline should be committed before text input opens")
-            assertEquals(true, historyStore.canUndo(document.document))
+            assertEquals(0, currentStrokes.size, "Semantic balloon should not commit a provisional outline stroke")
+            assertEquals(0, workspace.currentAnnotations().size)
+            assertEquals(false, historyStore.canUndo(document.document))
 
             requireNotNull(balloonCommit).invoke(null)
 
-            assertEquals(0, currentStrokes.size, "Esc should remove the provisional balloon outline")
+            assertEquals(0, currentStrokes.size, "Cancel should not leave balloon outline strokes")
+            assertEquals(0, workspace.currentAnnotations().size, "Cancel should not create a semantic balloon annotation")
             assertEquals(false, historyStore.canUndo(document.document), "Cancel should not leave an undo step behind")
+        } finally {
+            sync.cancelPendingPersistence()
+        }
+    }
+
+    @Test
+    fun `committing text creates one semantic annotation instead of glyph strokes`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {}
+            """.trimIndent()
+        )
+        val canvas = JPanel()
+        val editor = TestEditor(document, canvas)
+        val mapper = DrawingCoordinateMapper(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            minCodeClearancePx = 8
+        )
+        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
+        val strokeStore = DrawingStrokeStore(stateService)
+        val workspace = DrawingStrokeWorkspace(
+            currentDocument = { editor.editor.document },
+            strokeStore = strokeStore,
+            coordinateMapper = mapper,
+            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
+        )
+        val historyStore = DrawingHistoryStore()
+        val currentStrokes = strokeStore.currentStrokes(document.document)
+        val preview = ShapeStrokeFactory.buildShapeStroke(
+            start = Point(70, 50),
+            end = Point(240, 110),
+            kind = ShapeKind.TEXT,
+            constrain = false,
+            color = Color.MAGENTA,
+            width = 3.5f,
+            shapeEdgeSpacing = 8.0,
+            ellipseSegments = 24,
+            toAnchor = { point -> mapper.viewPointToAnchor(point) }
+        )
+        var previewHolder: StrokePath? = preview
+        var textCommit: ((String?) -> Unit)? = null
+        val sync = documentSync(document, editor, mapper, strokeStore)
+
+        val controller = DrawingCanvasController(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            currentStrokesProvider = { currentStrokes },
+            historyStore = historyStore,
+            strokeWorkspace = workspace,
+            documentSync = sync,
+            coordinateMapper = mapper,
+            strokePathTools = DrawingStrokePathTools(
+                eraseRadius = 10.0,
+                drawSampleSpacingPx = 4.0,
+                freehandSimplifyTolerancePx = 2.0,
+                freehandSimplifyMinPoints = 3,
+                toViewPoint = { anchor: AnchorPoint -> mapper.toViewPoint(anchor) }
+            ),
+            drawColorProvider = { Color.MAGENTA },
+            selectedShapeKindProvider = { ShapeKind.TEXT },
+            currentStrokeGetter = { null },
+            currentStrokeSetter = { _ -> },
+            shapePreviewGetter = { previewHolder },
+            shapePreviewSetter = { previewHolder = it },
+            refreshHistoryState = {},
+            canvasPadding = 12,
+            dirtyPaddingPx = 12,
+            eraseRadius = 10.0,
+            freehandMinPointDistancePx = 4.0,
+            eraseMinMovePx = 2.0,
+            shapeEdgeSpacing = 8.0,
+            ellipseSegments = 24,
+            balloonTextEditor = { _, commit -> textCommit = commit }
+        )
+
+        try {
+            controller.handleShapeReleased()
+            requireNotNull(textCommit).invoke("One semantic text")
+
+            assertEquals(0, currentStrokes.size, "Text should not be committed as glyph StrokePath objects")
+            val annotation = workspace.currentAnnotations().single()
+            assertEquals(AnnotationKind.TEXT, annotation.kind)
+            assertEquals("One semantic text", annotation.text)
+            assertEquals(Color.MAGENTA, annotation.color)
+            assertEquals(true, historyStore.canUndo(document.document))
         } finally {
             sync.cancelPendingPersistence()
         }
@@ -1194,8 +1283,11 @@ class DrawingDocumentEditInteractionTest {
             val beforePoint = mapper.toViewPoint(fill.anchor.copy())!!
             val pressPoint = Point(beforePoint.x + fill.width / 2, beforePoint.y + fill.height / 2)
             controller.handleSelectPressed(pressPoint)
+            assertEquals(false, controller.isSelectionMoveInProgress())
             controller.handleSelectDragged(pressPoint, Point(pressPoint.x + 32, pressPoint.y + editor.lineHeight))
+            assertEquals(true, controller.isSelectionMoveInProgress())
             controller.handleSelectReleased()
+            assertEquals(false, controller.isSelectionMoveInProgress())
 
             val afterPoint = mapper.toViewPoint(fill.anchor.copy())!!
             assertEquals(beforePoint.x + 32, afterPoint.x)

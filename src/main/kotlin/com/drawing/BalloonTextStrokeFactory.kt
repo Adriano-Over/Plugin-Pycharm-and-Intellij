@@ -15,6 +15,13 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
+/**
+ * Legacy vector-glyph text generator.
+ *
+ * Committed text and balloon annotations should use AnnotationPath plus the cached
+ * AnnotationRenderer path instead of generating many StrokePath glyph fragments.
+ * Kept temporarily for fallback, migration tests, and old geometry coverage.
+ */
 internal object BalloonTextStrokeFactory {
     private const val MIN_FONT_SIZE = 10
     private const val MAX_FONT_SIZE = 32

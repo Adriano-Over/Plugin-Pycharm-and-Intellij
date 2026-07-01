@@ -170,6 +170,16 @@ object DrawingViewportTools {
         }
     }
 
+    fun isAnnotationHiddenByCollapsedFold(
+        annotation: AnnotationPath,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>
+    ): Boolean {
+        if (collapsedRegions.isEmpty()) return false
+        return collapsedRegions.any { region ->
+            annotation.anchor.offset in region.startOffset..region.endOffset
+        }
+    }
+
     fun collapsedFoldMarkersFor(
         strokes: Iterable<StrokePath>,
         collapsedRegions: List<CollapsedFoldRegionSnapshot>
@@ -193,6 +203,21 @@ object DrawingViewportTools {
         var union: Rectangle? = null
         for (stroke in strokes) {
             val bounds = computeStrokeViewBounds(stroke, toViewPoint, extraPadding) ?: continue
+            union = if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
+        }
+        return union
+    }
+
+    fun computeAnnotationsViewBounds(
+        annotations: Iterable<AnnotationPath>,
+        toViewPoint: (AnchorPoint) -> Point?,
+        extraPadding: Int = 0
+    ): Rectangle? {
+        var union: Rectangle? = null
+        for (annotation in annotations) {
+            val topLeft = toViewPoint(annotation.anchor.copy()) ?: continue
+            val bounds = Rectangle(topLeft.x, topLeft.y, annotation.width, annotation.height)
+            bounds.grow(extraPadding, extraPadding)
             union = if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
         }
         return union

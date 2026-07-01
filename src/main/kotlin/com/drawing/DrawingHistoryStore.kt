@@ -5,7 +5,8 @@ import java.util.WeakHashMap
 
 data class DrawingHistorySnapshot(
     val strokes: List<StrokePath>,
-    val rasterFills: List<RasterFillPath>
+    val rasterFills: List<RasterFillPath>,
+    val annotations: List<AnnotationPath> = emptyList()
 )
 
 class DrawingHistoryStore(
@@ -17,10 +18,11 @@ class DrawingHistoryStore(
     fun saveStateForUndo(
         document: Document,
         currentStrokes: List<StrokePath>,
-        currentRasterFills: List<RasterFillPath> = emptyList()
+        currentRasterFills: List<RasterFillPath> = emptyList(),
+        currentAnnotations: List<AnnotationPath> = emptyList()
     ) {
         val undo = undoByDocument.getOrPut(document) { mutableListOf() }
-        undo += snapshot(currentStrokes, currentRasterFills)
+        undo += snapshot(currentStrokes, currentRasterFills, currentAnnotations)
         if (undo.size > maxUndoDepth) {
             undo.removeAt(0)
         }
@@ -30,13 +32,14 @@ class DrawingHistoryStore(
     fun restoreUndo(
         document: Document,
         currentStrokes: List<StrokePath>,
-        currentRasterFills: List<RasterFillPath> = emptyList()
+        currentRasterFills: List<RasterFillPath> = emptyList(),
+        currentAnnotations: List<AnnotationPath> = emptyList()
     ): DrawingHistorySnapshot? {
         val undo = undoByDocument.getOrPut(document) { mutableListOf() }
         if (undo.isEmpty()) return null
 
         val redo = redoByDocument.getOrPut(document) { mutableListOf() }
-        redo += snapshot(currentStrokes, currentRasterFills)
+        redo += snapshot(currentStrokes, currentRasterFills, currentAnnotations)
 
         return undo.removeAt(undo.lastIndex).deepCopy()
     }
@@ -44,13 +47,14 @@ class DrawingHistoryStore(
     fun restoreRedo(
         document: Document,
         currentStrokes: List<StrokePath>,
-        currentRasterFills: List<RasterFillPath> = emptyList()
+        currentRasterFills: List<RasterFillPath> = emptyList(),
+        currentAnnotations: List<AnnotationPath> = emptyList()
     ): DrawingHistorySnapshot? {
         val redo = redoByDocument.getOrPut(document) { mutableListOf() }
         if (redo.isEmpty()) return null
 
         val undo = undoByDocument.getOrPut(document) { mutableListOf() }
-        undo += snapshot(currentStrokes, currentRasterFills)
+        undo += snapshot(currentStrokes, currentRasterFills, currentAnnotations)
 
         return redo.removeAt(redo.lastIndex).deepCopy()
     }
@@ -73,15 +77,21 @@ class DrawingHistoryStore(
         return redoByDocument[document]?.isNotEmpty() == true
     }
 
-    private fun snapshot(strokes: List<StrokePath>, rasterFills: List<RasterFillPath>): DrawingHistorySnapshot =
+    private fun snapshot(
+        strokes: List<StrokePath>,
+        rasterFills: List<RasterFillPath>,
+        annotations: List<AnnotationPath>
+    ): DrawingHistorySnapshot =
         DrawingHistorySnapshot(
             strokes = strokes.map { it.deepCopy() },
-            rasterFills = rasterFills.map { it.deepCopy() }
+            rasterFills = rasterFills.map { it.deepCopy() },
+            annotations = annotations.map { it.deepCopy() }
         )
 
     private fun DrawingHistorySnapshot.deepCopy(): DrawingHistorySnapshot =
         DrawingHistorySnapshot(
             strokes = strokes.map { it.deepCopy() },
-            rasterFills = rasterFills.map { it.deepCopy() }
+            rasterFills = rasterFills.map { it.deepCopy() },
+            annotations = annotations.map { it.deepCopy() }
         )
 }

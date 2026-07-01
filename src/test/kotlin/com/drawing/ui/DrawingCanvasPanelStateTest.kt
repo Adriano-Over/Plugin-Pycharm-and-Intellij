@@ -8,6 +8,7 @@ import com.drawing.RecentColorStore
 import com.drawing.ShapeKind
 import com.intellij.openapi.project.Project
 import java.awt.Color
+import java.awt.Cursor
 import java.awt.Rectangle
 import java.awt.event.FocusEvent
 import java.lang.reflect.InvocationHandler
@@ -124,6 +125,15 @@ class DrawingCanvasPanelStateTest {
 
             assertEquals(toolMode, fixture.stateService.getSelectedToolMode(), "$toolMode should survive recent color save")
         }
+    }
+
+    @Test
+    fun `select tool uses the regular cursor until an object is being moved`() {
+        val fixture = panelFixture()
+
+        fixture.panel.setSelectMode()
+
+        assertEquals(Cursor.DEFAULT_CURSOR, fixture.panel.cursor.type)
     }
 
     @Test

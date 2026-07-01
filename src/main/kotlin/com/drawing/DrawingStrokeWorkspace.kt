@@ -10,6 +10,7 @@ class DrawingStrokeWorkspace(
     private val strokeRenderer: DrawingStrokeRenderer
 ) {
     private val rasterFillImageCache = RasterFillImageCache()
+    private val annotationImageCache = AnnotationImageCache()
 
     fun currentStrokes(): MutableList<StrokePath> {
         return strokeStore.currentStrokes(currentDocument())
@@ -17,6 +18,10 @@ class DrawingStrokeWorkspace(
 
     fun currentRasterFills(): MutableList<RasterFillPath> {
         return strokeStore.currentRasterFills(currentDocument())
+    }
+
+    fun currentAnnotations(): MutableList<AnnotationPath> {
+        return strokeStore.currentAnnotations(currentDocument())
     }
 
     fun currentStrokeBounds(): MutableMap<Long, StrokeLineBounds> {
@@ -35,9 +40,15 @@ class DrawingStrokeWorkspace(
         strokeStore.setRasterFills(document, rasterFills)
     }
 
+    fun setAnnotations(document: Document, annotations: MutableList<AnnotationPath>) {
+        strokeStore.setAnnotations(document, annotations)
+        annotationImageCache.clear()
+    }
+
     fun clearDocument(document: Document) {
         strokeStore.clearDocument(document)
         rasterFillImageCache.clear()
+        annotationImageCache.clear()
     }
 
     fun addStroke(stroke: StrokePath) {
@@ -50,6 +61,11 @@ class DrawingStrokeWorkspace(
         currentRasterFills().add(fill)
     }
 
+    fun addAnnotation(annotation: AnnotationPath) {
+        currentAnnotations().add(annotation)
+        annotationImageCache.invalidate(annotation.id)
+    }
+
     fun rasterFillContentBounds(fill: RasterFillPath): Rectangle? {
         if (fill.width <= 0 || fill.height <= 0) return null
         val topLeft = coordinateMapper.toContentPoint(fill.anchor.copy()) ?: return null
@@ -57,6 +73,18 @@ class DrawingStrokeWorkspace(
     }
 
     fun rasterFillImage(fill: RasterFillPath) = rasterFillImageCache.get(fill)
+
+    fun annotationContentBounds(annotation: AnnotationPath): Rectangle? {
+        if (annotation.width <= 0 || annotation.height <= 0) return null
+        val topLeft = coordinateMapper.toContentPoint(annotation.anchor.copy()) ?: return null
+        return Rectangle(topLeft.x, topLeft.y, annotation.width, annotation.height)
+    }
+
+    fun annotationImage(annotation: AnnotationPath) = annotationImageCache.getOrRender(annotation)
+
+    fun invalidateAnnotation(annotationId: Long) {
+        annotationImageCache.invalidate(annotationId)
+    }
 
     fun rebuildStrokeBounds(document: Document) {
         val rebuilt = mutableMapOf<Long, StrokeLineBounds>()

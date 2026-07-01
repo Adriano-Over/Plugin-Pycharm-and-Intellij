@@ -30,6 +30,6 @@
                 anchor="right"
                 factoryClass="com.drawing.DrawingToolWindowFactory"
                 canCloseContents="false"
-                secondary="true"/>
+                secondary="false"/>
     </extensions>
 </idea-plugin>

@@ -15,6 +15,7 @@ class DrawingStrokeStore(
 ) {
     private val strokesByDocument = WeakHashMap<Document, MutableList<StrokePath>>()
     private val rasterFillsByDocument = WeakHashMap<Document, MutableList<RasterFillPath>>()
+    private val annotationsByDocument = WeakHashMap<Document, MutableList<AnnotationPath>>()
     private val strokeBoundsByDocument = WeakHashMap<Document, MutableMap<Long, StrokeLineBounds>>()
     private val strokeGeometryByDocument = WeakHashMap<Document, MutableMap<Long, StrokeGeometryContent>>()
 
@@ -47,6 +48,11 @@ class DrawingStrokeStore(
         return rasterFillsByDocument.getOrPut(document) { mutableListOf() }
     }
 
+    fun currentAnnotations(document: Document?): MutableList<AnnotationPath> {
+        if (document == null) return mutableListOf()
+        return annotationsByDocument.getOrPut(document) { mutableListOf() }
+    }
+
     fun currentStrokeBounds(document: Document?): MutableMap<Long, StrokeLineBounds> {
         if (document == null) return mutableMapOf()
         return strokeBoundsByDocument.getOrPut(document) { mutableMapOf() }
@@ -67,10 +73,16 @@ class DrawingStrokeStore(
         rasterFillsByDocument[document] = rasterFills
     }
 
+    fun setAnnotations(document: Document?, annotations: MutableList<AnnotationPath>) {
+        if (document == null) return
+        annotationsByDocument[document] = annotations
+    }
+
     fun clearDocument(document: Document?) {
         if (document == null) return
         strokesByDocument[document] = mutableListOf()
         rasterFillsByDocument[document] = mutableListOf()
+        annotationsByDocument[document] = mutableListOf()
         strokeBoundsByDocument[document] = mutableMapOf()
         strokeGeometryByDocument[document] = mutableMapOf()
     }
@@ -84,6 +96,7 @@ class DrawingStrokeStore(
 
         val savedFromState = stateService.getStrokes(filePath)
         val savedRasterFills = stateService.getRasterFills(filePath)
+        val savedAnnotations = stateService.getAnnotations(filePath)
         DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes file=$filePath saved=${savedFromState.size}")
         val loaded = savedFromState.map { saved ->
             StrokePath(
@@ -135,6 +148,28 @@ class DrawingStrokeStore(
             )
         }.toMutableList()
 
+        val loadedAnnotations = savedAnnotations.mapNotNull { saved ->
+            val anchor = saved.anchor.toAnchor()
+            normalizeAnchor(document, anchor)
+            val kind = runCatching { AnnotationKind.valueOf(saved.kind) }.getOrNull() ?: AnnotationKind.TEXT
+            val style = runCatching { BalloonTextStyle.valueOf(saved.style) }.getOrNull() ?: BalloonTextStyle.SOLID
+            if (saved.text.isBlank() || saved.width <= 0 || saved.height <= 0) {
+                null
+            } else {
+                AnnotationPath(
+                    id = if (saved.id != 0L) saved.id else nextStrokeObjectGroupId(),
+                    text = saved.text,
+                    color = Color(saved.color, true),
+                    anchor = anchor,
+                    width = saved.width,
+                    height = saved.height,
+                    kind = kind,
+                    style = style,
+                    objectGroupId = saved.objectGroupId
+                )
+            }
+        }.toMutableList()
+
         val loadedRasterFills = savedRasterFills.map { saved ->
             val anchor = saved.anchor.toAnchor()
             normalizeAnchor(document, anchor)
@@ -153,20 +188,26 @@ class DrawingStrokeStore(
 
         strokesByDocument[document] = loaded
         rasterFillsByDocument[document] = loadedRasterFills
-        DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes mapped=${loaded.size} rasterFills=${loadedRasterFills.size} file=$filePath")
+        annotationsByDocument[document] = loadedAnnotations
+        DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes mapped=${loaded.size} rasterFills=${loadedRasterFills.size} annotations=${loadedAnnotations.size} file=$filePath")
         return loaded
     }
 
     fun persistStrokes(filePath: String?, strokes: List<StrokePath>) {
-        persistDrawing(filePath, strokes, emptyList())
+        persistDrawing(filePath, strokes, emptyList(), emptyList())
     }
 
-    fun persistDrawing(filePath: String?, strokes: List<StrokePath>, rasterFills: List<RasterFillPath>) {
+    fun persistDrawing(
+        filePath: String?,
+        strokes: List<StrokePath>,
+        rasterFills: List<RasterFillPath>,
+        annotations: List<AnnotationPath> = emptyList()
+    ) {
         if (filePath.isNullOrEmpty()) {
-            DrawingDiagnosticLog.warn("STORE", "persistDrawing skipped empty filePath strokes=${strokes.size} rasterFills=${rasterFills.size}")
+            DrawingDiagnosticLog.warn("STORE", "persistDrawing skipped empty filePath strokes=${strokes.size} rasterFills=${rasterFills.size} annotations=${annotations.size}")
             return
         }
-        DrawingDiagnosticLog.info("STORE", "persistDrawing file=$filePath strokes=${strokes.size} rasterFills=${rasterFills.size} first=${DrawingDiagnosticLog.strokeSummary(strokes.firstOrNull())}")
+        DrawingDiagnosticLog.info("STORE", "persistDrawing file=$filePath strokes=${strokes.size} rasterFills=${rasterFills.size} annotations=${annotations.size} first=${DrawingDiagnosticLog.strokeSummary(strokes.firstOrNull())}")
 
         val saved = strokes.map { stroke ->
             SavedStroke(
@@ -209,8 +250,21 @@ class DrawingStrokeStore(
                 objectGroupId = fill.objectGroupId
             )
         }
-        DrawingDiagnosticLog.info("STORE", "persistDrawing savedPayload=${saved.size} rasterPayload=${savedRasterFills.size} pointCounts=${saved.joinToString(",") { it.points.size.toString() }}")
-        stateService.setDrawing(filePath, saved, savedRasterFills)
+        val savedAnnotations = annotations.map { annotation ->
+            SavedAnnotation(
+                id = annotation.id,
+                text = annotation.text,
+                color = annotation.color.rgb,
+                anchor = annotation.anchor.toSavedPoint(),
+                width = annotation.width,
+                height = annotation.height,
+                kind = annotation.kind.name,
+                style = annotation.style.name,
+                objectGroupId = annotation.objectGroupId
+            )
+        }
+        DrawingDiagnosticLog.info("STORE", "persistDrawing savedPayload=${saved.size} rasterPayload=${savedRasterFills.size} annotationPayload=${savedAnnotations.size} pointCounts=${saved.joinToString(",") { it.points.size.toString() }}")
+        stateService.setDrawing(filePath, saved, savedRasterFills, savedAnnotations)
     }
 
     private fun SavedPoint.toAnchor(): AnchorPoint {

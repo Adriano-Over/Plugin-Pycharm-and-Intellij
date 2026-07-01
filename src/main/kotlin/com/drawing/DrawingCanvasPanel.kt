@@ -120,6 +120,7 @@ class DrawingCanvasPanel(
         currentFilePath = { currentFile?.path },
         currentStrokes = ::currentStrokes,
         currentRasterFills = ::currentRasterFills,
+        currentAnnotations = ::currentAnnotations,
         onDocumentStrokesRemapped = { document ->
             strokeWorkspace.rebuildStrokeBounds(document)
             strokeWorkspace.resetStrokeGeometryCache(document)
@@ -159,10 +160,12 @@ class DrawingCanvasPanel(
         editorProvider = { editor },
         currentStrokesProvider = ::currentStrokes,
         currentRasterFillsProvider = ::currentRasterFills,
+        currentAnnotationsProvider = ::currentAnnotations,
         shapePreviewProvider = { shapePreview },
         collapsedFoldRegionsProvider = ::collapsedFoldRegionsSnapshot,
         selectedStrokeIdsProvider = canvasController::selectedStrokeIdsSnapshot,
         selectedRasterFillIdsProvider = canvasController::selectedRasterFillIdsSnapshot,
+        selectedAnnotationIdsProvider = canvasController::selectedAnnotationIdsSnapshot,
         selectionMarqueeProvider = canvasController::selectionMarqueeSnapshot,
         gridEnabledProvider = { gridEnabled },
         strokeRenderer = strokeRenderer,
@@ -193,9 +196,18 @@ class DrawingCanvasPanel(
                 )
             },
             onToolPreviewPointChanged = ::setToolPreviewPoint,
-            onSelectPressed = canvasController::handleSelectPressed,
-            onSelectDragged = canvasController::handleSelectDragged,
-            onSelectReleased = canvasController::handleSelectReleased,
+            onSelectPressed = { point ->
+                canvasController.handleSelectPressed(point)
+                updateToolCursor()
+            },
+            onSelectDragged = { previous, point ->
+                canvasController.handleSelectDragged(previous, point)
+                updateToolCursor()
+            },
+            onSelectReleased = {
+                canvasController.handleSelectReleased()
+                updateToolCursor()
+            },
             onFillPressed = canvasController::handleFillPressed,
             onErasePressed = canvasController::handleErasePressed,
             onEraseDragged = canvasController::handleEraseDragged,
@@ -506,7 +518,7 @@ class DrawingCanvasPanel(
 
     fun canUndo(): Boolean = historyStore.canUndo(editor?.document)
     fun canRedo(): Boolean = historyStore.canRedo(editor?.document)
-    fun hasDrawings(): Boolean = currentStrokes().isNotEmpty() || currentRasterFills().isNotEmpty()
+    fun hasDrawings(): Boolean = currentStrokes().isNotEmpty() || currentRasterFills().isNotEmpty() || currentAnnotations().isNotEmpty()
 
     private fun loadPersistedDrawColor(): Color {
         val saved = Color(drawingStateService.getSelectedColorRgb(), true)
@@ -579,7 +591,14 @@ class DrawingCanvasPanel(
             Cursor.getDefaultCursor()
         } else {
             when (currentTool) {
-                DrawingToolMode.SELECT -> Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
+                DrawingToolMode.SELECT -> {
+                    val cursorType = if (canvasController.isSelectionMoveInProgress()) {
+                        Cursor.MOVE_CURSOR
+                    } else {
+                        Cursor.DEFAULT_CURSOR
+                    }
+                    Cursor.getPredefinedCursor(cursorType)
+                }
                 DrawingToolMode.DRAW -> Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
                 DrawingToolMode.ERASE -> Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
                 DrawingToolMode.FILL -> Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
@@ -678,6 +697,8 @@ class DrawingCanvasPanel(
     private fun currentStrokes(): MutableList<StrokePath> = strokeWorkspace.currentStrokes()
 
     private fun currentRasterFills(): MutableList<RasterFillPath> = strokeWorkspace.currentRasterFills()
+
+    private fun currentAnnotations(): MutableList<AnnotationPath> = strokeWorkspace.currentAnnotations()
 
     override fun isOpaque(): Boolean = false
 

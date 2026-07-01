@@ -1,6 +1,8 @@
 package com.drawing.persistence
 
 import com.drawing.AnchorPoint
+import com.drawing.AnnotationKind
+import com.drawing.AnnotationPath
 import com.drawing.BalloonTextStyle
 import com.drawing.DrawingStrokeStore
 import com.drawing.DrawingStateService
@@ -214,5 +216,66 @@ class DrawingStrokeStoreTest {
         assertEquals(50, loadedFill.anchor.afterLineEndPx)
         assertEquals(60, loadedFill.anchor.foldHiddenHeightAbove)
         assertEquals(Color.GREEN.rgb, RasterFillCodec.decodePngBase64(loadedFill.pngBase64).getRGB(0, 0))
+    }
+
+    @Test
+    fun `annotations round trip through drawing persistence`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val store = DrawingStrokeStore(service)
+        val document = testDocument()
+        val annotation = AnnotationPath(
+            id = 321L,
+            text = "Semantic label",
+            color = Color.MAGENTA,
+            anchor = AnchorPoint(
+                line = 6,
+                column = 3,
+                dx = 44,
+                dy = 12,
+                offset = 60,
+                outsideCode = true,
+                afterLineEndPx = 7,
+                foldHiddenHeightAbove = 9
+            ),
+            width = 160,
+            height = 48,
+            kind = AnnotationKind.BALLOON,
+            style = BalloonTextStyle.OUTLINE,
+            objectGroupId = 654L
+        )
+
+        store.persistDrawing(filePath, emptyList(), emptyList(), listOf(annotation))
+
+        val saved = service.getAnnotations(filePath).single()
+        assertEquals(321L, saved.id)
+        assertEquals("Semantic label", saved.text)
+        assertEquals(Color.MAGENTA.rgb, saved.color)
+        assertEquals(160, saved.width)
+        assertEquals(48, saved.height)
+        assertEquals(AnnotationKind.BALLOON.name, saved.kind)
+        assertEquals(BalloonTextStyle.OUTLINE.name, saved.style)
+        assertEquals(654L, saved.objectGroupId)
+
+        val loadedStrokes = store.loadPersistedStrokes(filePath, document) { _, anchor ->
+            anchor.column += 2
+        }
+        val loadedAnnotation = store.currentAnnotations(document).single()
+
+        assertEquals(emptyList<StrokePath>(), loadedStrokes)
+        assertEquals(321L, loadedAnnotation.id)
+        assertEquals("Semantic label", loadedAnnotation.text)
+        assertEquals(Color.MAGENTA, loadedAnnotation.color)
+        assertEquals(5, loadedAnnotation.anchor.column)
+        assertEquals(44, loadedAnnotation.anchor.dx)
+        assertEquals(12, loadedAnnotation.anchor.dy)
+        assertEquals(60, loadedAnnotation.anchor.offset)
+        assertEquals(true, loadedAnnotation.anchor.outsideCode)
+        assertEquals(7, loadedAnnotation.anchor.afterLineEndPx)
+        assertEquals(9, loadedAnnotation.anchor.foldHiddenHeightAbove)
+        assertEquals(160, loadedAnnotation.width)
+        assertEquals(48, loadedAnnotation.height)
+        assertEquals(AnnotationKind.BALLOON, loadedAnnotation.kind)
+        assertEquals(BalloonTextStyle.OUTLINE, loadedAnnotation.style)
+        assertEquals(654L, loadedAnnotation.objectGroupId)
     }
 }

@@ -104,6 +104,35 @@ data class RasterFillPath(
     )
 }
 
+enum class AnnotationKind {
+    TEXT,
+    BALLOON
+}
+
+data class AnnotationPath(
+    val id: Long = nextStrokeObjectGroupId(),
+    var text: String,
+    var color: Color,
+    var anchor: AnchorPoint,
+    var width: Int,
+    var height: Int,
+    var kind: AnnotationKind,
+    var style: BalloonTextStyle = BalloonTextStyle.SOLID,
+    var objectGroupId: Long = 0L
+) {
+    fun deepCopy(): AnnotationPath = AnnotationPath(
+        id = id,
+        text = text,
+        color = Color(color.red, color.green, color.blue, color.alpha),
+        anchor = anchor.copy(),
+        width = width,
+        height = height,
+        kind = kind,
+        style = style,
+        objectGroupId = objectGroupId
+    )
+}
+
 data class CollapsedFoldRegionSnapshot(
     val startOffset: Int,
     val endOffset: Int,

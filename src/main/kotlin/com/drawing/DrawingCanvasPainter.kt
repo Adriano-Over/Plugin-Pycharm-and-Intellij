@@ -20,10 +20,12 @@ class DrawingCanvasPainter(
     private val editorProvider: () -> Editor?,
     private val currentStrokesProvider: () -> List<StrokePath>,
     private val currentRasterFillsProvider: () -> List<RasterFillPath> = { emptyList() },
+    private val currentAnnotationsProvider: () -> List<AnnotationPath> = { emptyList() },
     private val shapePreviewProvider: () -> StrokePath?,
     private val collapsedFoldRegionsProvider: () -> List<CollapsedFoldRegionSnapshot> = { emptyList() },
     private val selectedStrokeIdsProvider: () -> Set<Long> = { emptySet() },
     private val selectedRasterFillIdsProvider: () -> Set<Long> = { emptySet() },
+    private val selectedAnnotationIdsProvider: () -> Set<Long> = { emptySet() },
     private val selectionMarqueeProvider: () -> Rectangle? = { null },
     private val gridEnabledProvider: () -> Boolean,
     private val currentToolProvider: () -> DrawingToolMode,
@@ -86,6 +88,7 @@ class DrawingCanvasPainter(
                 }
             }
 
+            paintAnnotations(gContent, contentClip, collapsedFoldRegions)
             paintSelectionHighlight(gContent, contentClip)
             paintCollapsedFoldMarkers(gContent, collapsedFoldRegions, contentClip)
 
@@ -159,6 +162,7 @@ class DrawingCanvasPainter(
             }
         }
 
+        paintAnnotations(g, clip, collapsedFoldRegionsProvider())
         paintSelectionHighlight(g, clip)
         paintCollapsedFoldMarkers(g, collapsedFoldRegionsProvider(), clip)
 
@@ -249,6 +253,22 @@ class DrawingCanvasPainter(
             val bounds = strokeWorkspace.rasterFillContentBounds(fill) ?: continue
             if (!bounds.intersects(visibleContentClip)) continue
             val image = runCatching { strokeWorkspace.rasterFillImage(fill) }.getOrNull() ?: continue
+            g.drawImage(image, bounds.x, bounds.y, null)
+        }
+    }
+
+    private fun paintAnnotations(
+        g: Graphics2D,
+        visibleContentClip: Rectangle,
+        collapsedRegions: List<CollapsedFoldRegionSnapshot>
+    ) {
+        for (annotation in currentAnnotationsProvider()) {
+            if (DrawingViewportTools.isAnnotationHiddenByCollapsedFold(annotation, collapsedRegions)) {
+                continue
+            }
+            val bounds = strokeWorkspace.annotationContentBounds(annotation) ?: continue
+            if (!bounds.intersects(visibleContentClip)) continue
+            val image = runCatching { strokeWorkspace.annotationImage(annotation) }.getOrNull() ?: continue
             g.drawImage(image, bounds.x, bounds.y, null)
         }
     }
@@ -377,7 +397,8 @@ class DrawingCanvasPainter(
     private fun paintSelectionHighlight(g: Graphics2D, visibleContentClip: Rectangle) {
         val selectedIds = selectedStrokeIdsProvider()
         val selectedRasterFillIds = selectedRasterFillIdsProvider()
-        if (selectedIds.isEmpty() && selectedRasterFillIds.isEmpty()) return
+        val selectedAnnotationIds = selectedAnnotationIdsProvider()
+        if (selectedIds.isEmpty() && selectedRasterFillIds.isEmpty() && selectedAnnotationIds.isEmpty()) return
 
         val strokeBounds = currentStrokesProvider()
             .asSequence()
@@ -393,7 +414,17 @@ class DrawingCanvasPainter(
             .fold(null as Rectangle?) { union, bounds ->
                 if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
             }
-        val selectedBounds = DrawingViewportTools.unionRectangles(strokeBounds, rasterBounds) ?: return
+        val annotationBounds = currentAnnotationsProvider()
+            .asSequence()
+            .filter { it.id in selectedAnnotationIds }
+            .mapNotNull { strokeWorkspace.annotationContentBounds(it) }
+            .fold(null as Rectangle?) { union, bounds ->
+                if (union == null) Rectangle(bounds) else union.apply { add(bounds) }
+            }
+        val selectedBounds = DrawingViewportTools.unionRectangles(
+            DrawingViewportTools.unionRectangles(strokeBounds, rasterBounds),
+            annotationBounds
+        ) ?: return
 
         selectedBounds.grow(8, 8)
         if (!selectedBounds.intersects(visibleContentClip)) return
