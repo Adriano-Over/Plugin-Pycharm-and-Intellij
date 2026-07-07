@@ -46,6 +46,22 @@ class RasterFillEraseEngineTest {
         assertEquals(null, rebuilt[fill.id], "Fully erased raster fills should be removed")
     }
 
+    @Test
+    fun `erase removes sparse fill when dirty region contains all remaining opaque pixels`() {
+        val image = BufferedImage(20, 20, BufferedImage.TYPE_INT_ARGB)
+        image.setRGB(10, 10, Color.GREEN.rgb)
+        val fill = rasterFillFromImage(image)
+
+        val rebuilt = RasterFillEraseEngine.eraseAlongPathByFill(
+            fills = listOf(fill),
+            localPoints = listOf(Point(10, 10)),
+            radius = 2.0,
+            toViewPoint = toViewPoint
+        )
+
+        assertEquals(null, rebuilt[fill.id], "Sparse fills should be removed when their only opaque pixels are erased")
+    }
+
     private fun solidFill(width: Int, height: Int): RasterFillPath {
         val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
         for (y in 0 until height) {
@@ -53,14 +69,17 @@ class RasterFillEraseEngineTest {
                 image.setRGB(x, y, Color.GREEN.rgb)
             }
         }
+        return rasterFillFromImage(image)
+    }
+
+    private fun rasterFillFromImage(image: BufferedImage): RasterFillPath {
         return RasterFillPath(
             id = 88L,
             color = Color.GREEN,
             anchor = AnchorPoint(line = 0, column = 0, dx = 0, dy = 0),
-            width = width,
-            height = height,
+            width = image.width,
+            height = image.height,
             pngBase64 = RasterFillCodec.encodePngBase64(image)
         )
     }
 }
-

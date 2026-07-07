@@ -549,8 +549,13 @@ class DrawingCoordinateMapper(
         val replacedEnd = event.offset + event.oldLength
         val insertedLength = event.newLength
         val delta = insertedLength - event.oldLength
+        val insertedLineBreakIndex = insertedLineBreakIndexAtAnchor(event, anchor)
 
-        anchor.offset = remapOffset(anchor.offset, editStart, replacedEnd, insertedLength, delta)
+        anchor.offset = if (insertedLineBreakIndex != null) {
+            editStart + insertedLineBreakIndex
+        } else {
+            remapOffset(anchor.offset, editStart, replacedEnd, insertedLength, delta)
+        }
         syncAnchorFromOffset(document, anchor)
     }
 
@@ -606,12 +611,26 @@ class DrawingCoordinateMapper(
         }.coerceAtLeast(0)
     }
 
+    private fun insertedLineBreakIndexAtAnchor(event: DocumentEvent, anchor: AnchorPoint): Int? {
+        if (event.oldLength != 0) return null
+        if (anchor.offset != event.offset) return null
+
+        val insertedText = event.newFragment
+        for (index in 0 until insertedText.length) {
+            val char = insertedText[index]
+            if (char == '\n' || char == '\r') {
+                return index
+            }
+        }
+        return null
+    }
+
     private fun syncAnchorFromOffset(document: Document, anchor: AnchorPoint) {
         val clampedOffset = anchor.offset.coerceIn(0, document.textLength.coerceAtLeast(0))
-        anchor.offset = clampedOffset
         val line = document.getLineNumber(clampedOffset)
         val lineStart = document.getLineStartOffset(line)
         val lineEnd = document.getLineEndOffset(line)
+        anchor.offset = lineEnd
         anchor.line = line
         anchor.column = lineEnd - lineStart
     }

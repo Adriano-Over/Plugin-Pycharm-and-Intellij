@@ -35,6 +35,21 @@ class AnnotationRendererTest {
     }
 
     @Test
+    fun `balloon renderer tail points to lower-left like the preview shape`() {
+        val image = AnnotationRenderer.render(annotation(kind = AnnotationKind.BALLOON))
+        val lowestVisibleY = (image.height - 1 downTo 0).first { y ->
+            (0 until image.width).any { x -> image.visibleAt(x, y) }
+        }
+        val lowestVisibleXs = (0 until image.width).filter { x -> image.visibleAt(x, lowestVisibleY) }
+        val tailCenterX = lowestVisibleXs.average()
+
+        assertTrue(
+            tailCenterX < image.width / 2.0,
+            "Committed balloon tail should point to the lower-left side, matching the preview"
+        )
+    }
+
+    @Test
     fun `image cache reuses unchanged annotation and invalidates by id`() {
         val cache = AnnotationImageCache()
         val annotation = annotation(kind = AnnotationKind.TEXT)
@@ -68,9 +83,13 @@ class AnnotationRendererTest {
     private fun hasVisiblePixel(image: java.awt.image.BufferedImage): Boolean {
         for (y in 0 until image.height) {
             for (x in 0 until image.width) {
-                if ((image.getRGB(x, y) ushr 24) != 0) return true
+                if (image.visibleAt(x, y)) return true
             }
         }
         return false
+    }
+
+    private fun java.awt.image.BufferedImage.visibleAt(x: Int, y: Int): Boolean {
+        return (getRGB(x, y) ushr 24) != 0
     }
 }

@@ -25,10 +25,9 @@ internal object DrawingStateBinder {
 
     fun applyColorStatusLabel(label: JLabel, color: Color) {
         val colorHex = toHexColor(color)
-        label.text = "Color: $colorHex"
+        label.text = ""
         label.background = color
-        label.foreground = readableForegroundFor(color)
-        label.border = BorderFactory.createLineBorder(Color(95, 95, 95), 1)
+        label.border = BorderFactory.createEmptyBorder()
         label.toolTipText = "Selected color: $colorHex / rgb(${color.red}, ${color.green}, ${color.blue})"
     }
 
@@ -72,7 +71,7 @@ internal object DrawingStateBinder {
     }
 
     fun applyPassThroughButton(button: JButton, enabled: Boolean) {
-        button.text = if (enabled) "Pass-Through ON" else "Pass-Through OFF"
+        button.text = if (enabled) "Code ON" else "Code OFF"
         button.toolTipText = if (enabled) {
             "Let the editor receive clicks and drags while drawings stay visible. Drawing will remember this choice"
         } else {
@@ -129,6 +128,14 @@ internal object DrawingStateBinder {
         applyToolButton(button, active, DrawingToolMode.SHAPES)
     }
 
+    fun applyTextToolButton(button: JButton, active: Boolean) {
+        applyOptionalAccentToolButton(button, active, Color(128, 54, 94), Color(245, 125, 175))
+    }
+
+    fun applyBalloonToolButton(button: JButton, active: Boolean) {
+        applyOptionalAccentToolButton(button, active, Color(130, 105, 32), Color(245, 220, 90))
+    }
+
     fun applyToolStatusLabel(label: JLabel, activeTool: DrawingToolMode, selectedShapeName: String) {
         val toolText = toolStatusText(activeTool, selectedShapeName)
         val (backgroundColor, borderColor) = toolAccentColors(activeTool)
@@ -179,6 +186,21 @@ internal object DrawingStateBinder {
         button.background = defaultBackground
         button.foreground = defaultForeground
         button.border = BorderFactory.createLineBorder(defaultBorderColor, 1)
+    }
+
+    private fun applyOptionalAccentToolButton(
+        button: JButton,
+        active: Boolean,
+        activeBackground: Color,
+        activeBorder: Color
+    ) {
+        if (active) {
+            button.background = activeBackground
+            button.foreground = Color.WHITE
+            button.border = BorderFactory.createLineBorder(activeBorder, 1)
+        } else {
+            applyDefaultStyle(button)
+        }
     }
 
     private fun applyDisabledStyle(button: JButton) {

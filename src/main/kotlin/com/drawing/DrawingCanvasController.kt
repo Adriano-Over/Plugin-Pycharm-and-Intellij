@@ -3,12 +3,8 @@ package com.drawing
 import com.intellij.openapi.editor.Editor
 import java.awt.BasicStroke
 import java.awt.Color
-import java.awt.Font
-import java.awt.FontMetrics
-import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.Rectangle
-import java.awt.image.BufferedImage
 import java.awt.geom.Area
 import java.awt.geom.Ellipse2D
 import java.awt.geom.Path2D
@@ -57,6 +53,7 @@ class DrawingCanvasController(
     private val selectedRasterFillIds = linkedSetOf<Long>()
     private val selectedAnnotationIds = linkedSetOf<Long>()
     private var selectionMoveUndoSaved = false
+    private var eraseUndoSaved = false
     private var selectionMarqueeStart: Point? = null
     private var selectionMarqueeBounds: Rectangle? = null
 
@@ -76,6 +73,7 @@ class DrawingCanvasController(
         selectedRasterFillIds.clear()
         selectedAnnotationIds.clear()
         selectionMoveUndoSaved = false
+        eraseUndoSaved = false
         selectionMarqueeStart = null
         selectionMarqueeBounds = null
         documentSync.persistCurrentStrokes()
@@ -170,6 +168,7 @@ class DrawingCanvasController(
         selectionMarqueeStart = null
         selectionMarqueeBounds = null
         selectionMoveUndoSaved = false
+        eraseUndoSaved = false
         if (repaint) {
             repaintSelection(oldSelection, oldRasterSelection, oldAnnotationSelection)
             DrawingViewportTools.repaintRect(canvas, oldMarquee?.grown(selectionRepaintPaddingPx))
@@ -202,6 +201,7 @@ class DrawingCanvasController(
         }
 
         selectionMoveUndoSaved = false
+        eraseUndoSaved = false
         refreshHistoryState()
     }
 
@@ -356,7 +356,6 @@ class DrawingCanvasController(
 
     fun handleErasePressed(safePoint: Point) {
         clearSelection()
-        saveStateForUndo()
         applyErasePath(listOf(safePoint))
         DrawingViewportTools.repaintAround(canvas, listOf(safePoint), dirtyPaddingPx + eraseRadius.roundToInt())
     }
@@ -378,8 +377,11 @@ class DrawingCanvasController(
     }
 
     fun handleEraseReleased() {
-        documentSync.schedulePersistCurrentStrokes()
-        refreshHistoryState()
+        if (eraseUndoSaved) {
+            documentSync.schedulePersistCurrentStrokes()
+            refreshHistoryState()
+        }
+        eraseUndoSaved = false
     }
 
     fun handleShapePressed() {
@@ -977,6 +979,12 @@ class DrawingCanvasController(
         refreshHistoryState()
     }
 
+    private fun saveStateForEraseUndo() {
+        if (eraseUndoSaved) return
+        saveStateForUndo()
+        eraseUndoSaved = true
+    }
+
     private fun applyErasePath(points: List<Point>) {
         if (points.isEmpty()) return
         val document = editorProvider()?.document ?: return
@@ -1004,26 +1012,17 @@ class DrawingCanvasController(
             }
         }
 
-        val semanticEraserPoints = points.map { point ->
+        val annotationEraserPoints = points.map { point ->
             SwingUtilities.convertPoint(canvas, point, currentEditor.contentComponent)
         }
-        val semanticEraserAreaContent = buildEraserArea(semanticEraserPoints, eraseRadius)
-        val removedAnnotationBounds = eraseAnnotationsByObjectHit(
+        val annotationEraserAreaContent = buildEraserArea(annotationEraserPoints, eraseRadius)
+        val changedAnnotationBounds = eraseAnnotationCharacters(
             annotations = annotations,
-            contentEraserArea = semanticEraserAreaContent
+            contentEraserArea = annotationEraserAreaContent,
+            onWillChange = ::saveStateForEraseUndo
         )
-        if (removedAnnotationBounds.isNotEmpty()) {
-            strokeWorkspace.setAnnotations(document, annotations)
-            repaintSemanticAnnotationBounds(currentEditor, removedAnnotationBounds)
-        }
-        val semanticDirtyBounds = eraseSemanticAnnotationCharacters(
-            candidates = candidates,
-            allStrokes = allStrokes,
-            contentEraserArea = semanticEraserAreaContent
-        )
-        if (semanticDirtyBounds.isNotEmpty()) {
-            strokeWorkspace.setStrokes(document, allStrokes)
-            repaintSemanticAnnotationBounds(currentEditor, semanticDirtyBounds)
+        if (changedAnnotationBounds.isNotEmpty()) {
+            repaintContentBounds(currentEditor, changedAnnotationBounds)
         }
 
         val rebuiltRasterFills = RasterFillEraseEngine.eraseAlongPathByFill(
@@ -1033,23 +1032,16 @@ class DrawingCanvasController(
             toViewPoint = coordinateMapper::toViewPoint
         )
         if (rebuiltRasterFills.isNotEmpty()) {
-            val mergedRasterFills = rasterFills.mapNotNull { fill ->
-                if (rebuiltRasterFills.containsKey(fill.id)) {
-                    rebuiltRasterFills[fill.id]
-                } else {
-                    fill
-                }
-            }.toMutableList()
-            strokeWorkspace.setRasterFills(document, mergedRasterFills)
+            saveStateForEraseUndo()
+            applyRasterFillEraseResults(rasterFills, rebuiltRasterFills)
         }
 
-        val drawableCandidates = candidates.filter { it.annotationText == null }
-        if (drawableCandidates.isEmpty()) {
+        if (candidates.isEmpty()) {
             return
         }
 
         val rebuiltByStroke = PaintGeometryEngine.eraseAlongPathByStroke(
-            strokes = drawableCandidates,
+            strokes = candidates,
             localPoints = points,
             radius = eraseRadius,
             toAnchor = { point -> coordinateMapper.viewPointToAnchor(point, allowCodeArea = true) },
@@ -1060,17 +1052,18 @@ class DrawingCanvasController(
             return
         }
 
+        saveStateForEraseUndo()
         var replacementCount = 0
         for (replacements in rebuiltByStroke.values) {
             replacementCount += replacements.size
         }
 
-        for (stroke in drawableCandidates) {
+        for (stroke in candidates) {
             boundsMap.remove(stroke.id)
             geometryMap.remove(stroke.id)
         }
 
-        val merged = ArrayList<StrokePath>(allStrokes.size - drawableCandidates.size + replacementCount)
+        val merged = ArrayList<StrokePath>(allStrokes.size - candidates.size + replacementCount)
         for (stroke in allStrokes) {
             val replacements = rebuiltByStroke[stroke.id]
             if (replacements == null) {
@@ -1088,101 +1081,76 @@ class DrawingCanvasController(
         strokeWorkspace.setStrokes(document, merged)
     }
 
-    private fun eraseAnnotationsByObjectHit(
+    private fun applyRasterFillEraseResults(
+        rasterFills: MutableList<RasterFillPath>,
+        rebuiltRasterFills: Map<Long, RasterFillPath?>
+    ) {
+        for (index in rasterFills.indices.reversed()) {
+            val fill = rasterFills[index]
+            if (!rebuiltRasterFills.containsKey(fill.id)) continue
+
+            val replacement = rebuiltRasterFills[fill.id]
+            if (replacement == null) {
+                selectedRasterFillIds.remove(fill.id)
+                rasterFills.removeAt(index)
+            } else {
+                rasterFills[index] = replacement
+            }
+            strokeWorkspace.invalidateRasterFill(fill.id)
+        }
+    }
+
+    private fun eraseAnnotationCharacters(
         annotations: MutableList<AnnotationPath>,
-        contentEraserArea: Area
+        contentEraserArea: Area,
+        onWillChange: () -> Unit
     ): List<Rectangle> {
         if (annotations.isEmpty()) return emptyList()
-        val removedBounds = mutableListOf<Rectangle>()
+        val changedBounds = mutableListOf<Rectangle>()
         val iterator = annotations.iterator()
         while (iterator.hasNext()) {
             val annotation = iterator.next()
             val bounds = strokeWorkspace.annotationContentBounds(annotation) ?: continue
             if (!contentEraserArea.intersects(bounds)) continue
-            removedBounds += Rectangle(bounds)
+            val hitCharacterIndexes = annotationCharacterIndexesHit(annotation, bounds, contentEraserArea)
+            if (hitCharacterIndexes.isEmpty()) continue
+
+            onWillChange()
+            changedBounds += Rectangle(bounds)
             strokeWorkspace.invalidateAnnotation(annotation.id)
-            selectedAnnotationIds.remove(annotation.id)
-            iterator.remove()
-        }
-        return removedBounds
-    }
-
-    private fun StrokePath.semanticGroupKey(): Long? {
-        return if (annotationText != null || kind == ShapeKind.TEXT || kind == ShapeKind.BALLOON) {
-            if (objectGroupId != 0L) objectGroupId else id
-        } else {
-            null
-        }
-    }
-
-    private fun eraseSemanticAnnotationCharacters(
-        candidates: List<StrokePath>,
-        allStrokes: MutableList<StrokePath>,
-        contentEraserArea: Area
-    ): List<Rectangle> {
-        val representativesByGroup = linkedMapOf<Long, StrokePath>()
-        for (stroke in candidates) {
-            val text = stroke.annotationText
-            val groupKey = stroke.semanticGroupKey()
-            if (text == null || groupKey == null) continue
-            representativesByGroup.putIfAbsent(groupKey, stroke)
-        }
-
-        val dirtyBounds = mutableListOf<Rectangle>()
-        for ((groupKey, representative) in representativesByGroup) {
-            val originalText = representative.annotationText ?: continue
-            val originalBounds = resolveSemanticAnnotationBounds(representative)
-            val updatedText = removeCharactersHitByEraser(
-                stroke = representative,
-                text = originalText,
-                contentEraserArea = contentEraserArea
-            )
-            if (updatedText == originalText) continue
-
-            for (stroke in allStrokes) {
-                if (stroke.annotationText != null && stroke.semanticGroupKey() == groupKey) {
-                    if (updatedText.isBlank()) {
-                        stroke.annotationText = null
-                        stroke.annotationTextStyle = null
-                        stroke.annotationBounds = null
-                    } else {
-                        stroke.annotationText = updatedText
-                    }
-                }
-            }
+            val updatedText = removeAnnotationCharacters(annotation.text, hitCharacterIndexes)
             if (updatedText.isBlank()) {
-                allStrokes.removeAll { stroke -> stroke.semanticGroupKey() == groupKey }
+                selectedAnnotationIds.remove(annotation.id)
+                iterator.remove()
+            } else {
+                annotation.text = updatedText
             }
-            originalBounds?.let { dirtyBounds += Rectangle(it) }
         }
-        return dirtyBounds
+        return changedBounds
     }
 
-    private fun repaintSemanticAnnotationBounds(editor: Editor, contentBounds: List<Rectangle>) {
-        for (bounds in contentBounds) {
-            val padded = Rectangle(bounds)
-            padded.grow(dirtyPaddingPx + eraseRadius.roundToInt(), dirtyPaddingPx + eraseRadius.roundToInt())
-            val canvasBounds = SwingUtilities.convertRectangle(editor.contentComponent, padded, canvas)
-            DrawingViewportTools.repaintRect(canvas, canvasBounds)
-        }
-    }
-
-    private fun removeCharactersHitByEraser(
-        stroke: StrokePath,
-        text: String,
+    private fun annotationCharacterIndexesHit(
+        annotation: AnnotationPath,
+        annotationContentBounds: Rectangle,
         contentEraserArea: Area
-    ): String {
-        if (text.isEmpty()) return text
-        val characterBounds = semanticCharacterBounds(stroke, text)
-        if (characterBounds.isEmpty()) return text
-
-        val indexesToRemove = characterBounds.asSequence()
-            .filter { !it.character.isWhitespace() }
-            .filter { contentEraserArea.intersects(it.bounds) }
-            .map { it.index }
+    ): Set<Int> {
+        return AnnotationTextLayout.characterBounds(annotation)
+            .asSequence()
+            .map { character ->
+                character.index to Rectangle(
+                    annotationContentBounds.x + character.bounds.x,
+                    annotationContentBounds.y + character.bounds.y,
+                    character.bounds.width,
+                    character.bounds.height
+                )
+            }
+            .filter { (_, bounds) -> contentEraserArea.contains(bounds.centerX, bounds.centerY) }
+            .map { (index, _) -> index }
             .toSet()
-        if (indexesToRemove.isEmpty()) return text
+    }
 
+    private fun removeAnnotationCharacters(text: String, indexesToRemove: Set<Int>): String {
+        if (indexesToRemove.isEmpty()) return text
         return buildString(text.length) {
             for (index in text.indices) {
                 if (index !in indexesToRemove) {
@@ -1192,176 +1160,14 @@ class DrawingCanvasController(
         }
     }
 
-    private fun semanticCharacterBounds(stroke: StrokePath, text: String): List<SemanticCharacterBounds> {
-        val bounds = resolveSemanticAnnotationBounds(stroke) ?: return emptyList()
-        if (bounds.width <= 0 || bounds.height <= 0) return emptyList()
-
-        val image = BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
-        val graphics = image.createGraphics()
-        return try {
-            val padding = maxOf(2, minOf(bounds.width, bounds.height) / 12)
-            val innerWidth = (bounds.width - padding * 2).coerceAtLeast(1)
-            val innerHeight = (bounds.height - padding * 2).coerceAtLeast(1)
-            val innerX = bounds.x + padding
-            val innerY = bounds.y + padding
-            val font = chooseSemanticFont(graphics, text, innerWidth, innerHeight)
-            val metrics = graphics.getFontMetrics(font)
-            val lines = wrapSemanticText(text, metrics, innerWidth)
-            if (lines.isEmpty()) return emptyList()
-
-            val lineHeight = metrics.height + 2
-            var y = innerY + metrics.ascent + maxOf(0, (innerHeight - (lineHeight * lines.size - 2)) / 2)
-            var searchStart = 0
-            val result = mutableListOf<SemanticCharacterBounds>()
-
-            for (line in lines) {
-                val lineStart = text.indexOf(line, searchStart).takeIf { it >= 0 } ?: searchStart
-                val lineWidth = metrics.stringWidth(line)
-                var x = innerX + maxOf(0, (innerWidth - lineWidth) / 2)
-                for (lineIndex in line.indices) {
-                    val character = line[lineIndex]
-                    val charWidth = metrics.charWidth(character).coerceAtLeast(1)
-                    result += SemanticCharacterBounds(
-                        index = (lineStart + lineIndex).coerceAtMost(text.lastIndex),
-                        character = character,
-                        bounds = Rectangle(x, y - metrics.ascent, charWidth, metrics.height)
-                    )
-                    x += charWidth
-                }
-                searchStart = (lineStart + line.length).coerceAtMost(text.length)
-                y += lineHeight
-            }
-
-            result
-        } finally {
-            graphics.dispose()
+    private fun repaintContentBounds(editor: Editor, contentBounds: List<Rectangle>) {
+        for (bounds in contentBounds) {
+            val padded = Rectangle(bounds)
+            padded.grow(dirtyPaddingPx + eraseRadius.roundToInt(), dirtyPaddingPx + eraseRadius.roundToInt())
+            val canvasBounds = SwingUtilities.convertRectangle(editor.contentComponent, padded, canvas)
+            DrawingViewportTools.repaintRect(canvas, canvasBounds)
         }
     }
-
-    private fun resolveSemanticAnnotationBounds(stroke: StrokePath): Rectangle? {
-        val sizeBounds = stroke.annotationBounds?.takeIf { it.width > 0 && it.height > 0 }
-        val anchorBounds = semanticGroupGeometryBounds(stroke)
-            ?: sizeBounds?.let { Rectangle(it) }
-            ?: return null
-        val width = sizeBounds?.width ?: anchorBounds.width
-        val height = sizeBounds?.height ?: anchorBounds.height
-        val x = anchorBounds.x + (anchorBounds.width - width) / 2
-        val y = anchorBounds.y + (anchorBounds.height - height) / 2
-        return Rectangle(x, y, width, height)
-    }
-
-    private fun semanticGroupGeometryBounds(stroke: StrokePath): Rectangle? {
-        val semanticKey = stroke.semanticGroupKey() ?: return null
-        var union: Rectangle? = null
-        for (candidate in currentStrokesProvider()) {
-            if (candidate.annotationText == null || candidate.semanticGroupKey() != semanticKey) {
-                continue
-            }
-            val bounds = strokeWorkspace.getOrBuildStrokeGeometryContent(candidate)?.bounds ?: continue
-            union = union?.apply { add(bounds) } ?: Rectangle(bounds)
-        }
-        return union
-    }
-
-    private fun chooseSemanticFont(g: Graphics2D, text: String, width: Int, height: Int): Font {
-        val startSize = minOf(36, maxOf(12, height * 4 / 5))
-        for (size in startSize downTo 10) {
-            val font = Font("Dialog", Font.PLAIN, size)
-            val metrics = g.getFontMetrics(font)
-            val lines = wrapSemanticText(text, metrics, width)
-            if (lines.isEmpty()) continue
-            val totalHeight = lines.size * (metrics.height + 2)
-            val widestLine = lines.maxOf { metrics.stringWidth(it) }
-            if (totalHeight <= height && widestLine <= width) {
-                return font
-            }
-        }
-        return Font("Dialog", Font.PLAIN, 10)
-    }
-
-    private fun wrapSemanticText(text: String, metrics: FontMetrics, maxWidth: Int): List<String> {
-        val lines = mutableListOf<String>()
-        for (paragraph in splitParagraphs(text)) {
-            if (paragraph.isBlank()) {
-                lines += ""
-                continue
-            }
-            var currentLine = ""
-            for (word in paragraph.trim().split(Regex("\\s+")).filter { it.isNotBlank() }) {
-                currentLine = wrapSemanticWord(currentLine, word, maxWidth, metrics, lines)
-            }
-            if (currentLine.isNotEmpty()) {
-                lines += currentLine
-            }
-        }
-        return lines
-    }
-
-    private fun wrapSemanticWord(
-        currentLine: String,
-        word: String,
-        maxWidth: Int,
-        metrics: FontMetrics,
-        lines: MutableList<String>
-    ): String {
-        var line = currentLine
-        var remaining = word
-        while (remaining.isNotEmpty()) {
-            val candidate = if (line.isEmpty()) remaining else "$line $remaining"
-            if (metrics.stringWidth(candidate) <= maxWidth) {
-                line = candidate
-                break
-            }
-
-            if (line.isNotEmpty()) {
-                lines += line
-                line = ""
-                continue
-            }
-
-            val breakIndex = fittingSemanticPrefixLength(remaining, maxWidth, metrics)
-            lines += remaining.substring(0, breakIndex)
-            remaining = remaining.substring(breakIndex)
-        }
-        return line
-    }
-
-    private fun fittingSemanticPrefixLength(text: String, maxWidth: Int, metrics: FontMetrics): Int {
-        var index = 0
-        var best = 0
-        while (index < text.length) {
-            val codePoint = text.codePointAt(index)
-            index += Character.charCount(codePoint)
-            if (metrics.stringWidth(text.substring(0, index)) <= maxWidth) {
-                best = index
-            } else {
-                break
-            }
-        }
-        return if (best > 0) best else text.offsetByCodePoints(0, 1).coerceAtMost(text.length)
-    }
-
-    private fun splitParagraphs(text: String): List<String> {
-        val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
-        val paragraphs = mutableListOf<String>()
-        var start = 0
-        while (start <= normalized.length) {
-            val end = normalized.indexOf('\n', start)
-            if (end < 0) {
-                paragraphs += normalized.substring(start)
-                break
-            }
-            paragraphs += normalized.substring(start, end)
-            start = end + 1
-        }
-        return paragraphs
-    }
-
-    private data class SemanticCharacterBounds(
-        val index: Int,
-        val character: Char,
-        val bounds: Rectangle
-    )
 
     private fun buildEraserArea(points: List<Point>, radius: Double): Area {
         if (points.isEmpty()) return Area()

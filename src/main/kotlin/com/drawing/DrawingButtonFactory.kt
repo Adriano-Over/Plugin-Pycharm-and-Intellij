@@ -15,7 +15,7 @@ internal object DrawingMetrics {
     const val BUTTON_HEIGHT = 28
     const val HALF_BUTTON_WIDTH = 49
     const val STATUS_HEIGHT = 24
-    const val COLOR_STATUS_HEIGHT = 20
+    const val COLOR_STATUS_HEIGHT = 5
     const val HEADER_BUTTON_SIZE = 20
 }
 

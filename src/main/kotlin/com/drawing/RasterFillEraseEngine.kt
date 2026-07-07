@@ -7,6 +7,11 @@ import java.awt.Rectangle
 import java.awt.geom.Path2D
 import java.awt.image.BufferedImage
 
+private data class RasterEraseResult(
+    val changed: Boolean,
+    val fullyTransparent: Boolean
+)
+
 internal object RasterFillEraseEngine {
     fun eraseAlongPathByFill(
         fills: List<RasterFillPath>,
@@ -24,10 +29,10 @@ internal object RasterFillEraseEngine {
             if (!fillBounds.intersects(eraserBounds)) continue
 
             val image = runCatching { RasterFillCodec.decodePngBase64(fill.pngBase64) }.getOrNull() ?: continue
-            val changed = clearEraserPath(image, localPoints, topLeft, radius)
-            if (!changed) continue
+            val result = clearEraserPath(image, localPoints, topLeft, radius)
+            if (!result.changed) continue
 
-            rebuiltByFill[fill.id] = if (isFullyTransparent(image)) {
+            rebuiltByFill[fill.id] = if (result.fullyTransparent) {
                 null
             } else {
                 fill.copy(
@@ -57,8 +62,10 @@ internal object RasterFillEraseEngine {
         points: List<Point>,
         fillTopLeft: Point,
         radius: Double
-    ): Boolean {
-        val beforeAlpha = alphaSum(image)
+    ): RasterEraseResult {
+        val dirtyBounds = imageDirtyBounds(image, eraserPathBounds(points, radius), fillTopLeft)
+            ?: return RasterEraseResult(changed = false, fullyTransparent = false)
+        val beforeAlpha = alphaSum(image, dirtyBounds)
         val g = image.createGraphics()
         try {
             g.composite = AlphaComposite.Clear
@@ -88,26 +95,64 @@ internal object RasterFillEraseEngine {
             g.dispose()
         }
 
-        return alphaSum(image) != beforeAlpha
+        val afterAlpha = alphaSum(image, dirtyBounds)
+        if (afterAlpha == beforeAlpha) {
+            return RasterEraseResult(changed = false, fullyTransparent = false)
+        }
+
+        val fullyTransparent = afterAlpha == 0L && isFullyTransparentOutside(image, dirtyBounds)
+        return RasterEraseResult(changed = true, fullyTransparent = fullyTransparent)
     }
 
-    private fun alphaSum(image: BufferedImage): Long {
+    private fun imageDirtyBounds(image: BufferedImage, eraserBounds: Rectangle, fillTopLeft: Point): Rectangle? {
+        val bounds = Rectangle(eraserBounds)
+        bounds.translate(-fillTopLeft.x, -fillTopLeft.y)
+        val imageBounds = Rectangle(0, 0, image.width, image.height)
+        return bounds.intersection(imageBounds).takeIf { !it.isEmpty }
+    }
+
+    private fun alphaSum(image: BufferedImage, bounds: Rectangle): Long {
         var sum = 0L
-        for (y in 0 until image.height) {
-            for (x in 0 until image.width) {
+        val maxX = bounds.x + bounds.width
+        val maxY = bounds.y + bounds.height
+        for (y in bounds.y until maxY) {
+            for (x in bounds.x until maxX) {
                 sum += (image.getRGB(x, y) ushr 24)
             }
         }
         return sum
     }
 
-    private fun isFullyTransparent(image: BufferedImage): Boolean {
-        for (y in 0 until image.height) {
-            for (x in 0 until image.width) {
+    private fun isFullyTransparentOutside(image: BufferedImage, dirtyBounds: Rectangle): Boolean {
+        if (dirtyBounds.contains(Rectangle(0, 0, image.width, image.height))) {
+            return true
+        }
+
+        if (!isTransparentBand(image, 0, dirtyBounds.y, 0, image.width)) return false
+        if (!isTransparentBand(image, dirtyBounds.y + dirtyBounds.height, image.height, 0, image.width)) return false
+        if (!isTransparentBand(image, dirtyBounds.y, dirtyBounds.y + dirtyBounds.height, 0, dirtyBounds.x)) return false
+        return isTransparentBand(
+            image = image,
+            startY = dirtyBounds.y,
+            endY = dirtyBounds.y + dirtyBounds.height,
+            startX = dirtyBounds.x + dirtyBounds.width,
+            endX = image.width
+        )
+    }
+
+    private fun isTransparentBand(
+        image: BufferedImage,
+        startY: Int,
+        endY: Int,
+        startX: Int,
+        endX: Int
+    ): Boolean {
+        if (startY >= endY || startX >= endX) return true
+        for (y in startY until endY) {
+            for (x in startX until endX) {
                 if ((image.getRGB(x, y) ushr 24) != 0) return false
             }
         }
         return true
     }
 }
-

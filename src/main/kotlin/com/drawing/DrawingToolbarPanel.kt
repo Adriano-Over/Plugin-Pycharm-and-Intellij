@@ -125,7 +125,7 @@ internal class DrawingToolbarPanel(
             overlayButton = buttonFactory.createButton("Overlay OFF", onOverlay).apply {
                 toolTipText = "Show the editor drawing overlay"
             },
-            passThroughButton = buttonFactory.createButton("Pass-Through OFF", onPassThrough).apply {
+            passThroughButton = buttonFactory.createButton("Code OFF", onPassThrough).apply {
                 toolTipText = "Let the editor receive mouse input while drawings remain visible"
             },
             selectButton = buttonFactory.createButton("Select", onSelect).apply {
@@ -183,15 +183,14 @@ internal class DrawingToolbarPanel(
     }
 
     private fun createColorStatusLabel(): JLabel {
-        return JLabel("Color: #000000", SwingConstants.CENTER).apply {
+        return JLabel("", SwingConstants.CENTER).apply {
             preferredSize = Dimension(DrawingMetrics.BAR_WIDTH, DrawingMetrics.COLOR_STATUS_HEIGHT)
+            minimumSize = Dimension(DrawingMetrics.BAR_WIDTH, DrawingMetrics.COLOR_STATUS_HEIGHT)
             maximumSize = Dimension(DrawingMetrics.BAR_WIDTH, DrawingMetrics.COLOR_STATUS_HEIGHT)
             alignmentX = Component.CENTER_ALIGNMENT
-            font = Font("Dialog", Font.PLAIN, 10)
             isOpaque = true
-            background = Color(38, 38, 38)
-            foreground = Color(210, 210, 210)
-            border = BorderFactory.createLineBorder(Color(80, 80, 80), 1)
+            background = Color.BLACK
+            border = BorderFactory.createEmptyBorder()
             toolTipText = "Selected Drawing color"
         }
     }
@@ -217,19 +216,19 @@ internal class DrawingToolbarPanel(
         historyRow: JPanel,
         controls: DrawingToolbarControls
     ) {
-        buttonColumn.add(controls.toolStatusLabel)
-        buttonColumn.add(Box.createVerticalStrut(4))
         buttonColumn.add(controls.colorStatusLabel)
+        buttonColumn.add(Box.createVerticalStrut(4))
+        buttonColumn.add(controls.toolStatusLabel)
         buttonColumn.add(createSectionSeparator())
         buttonColumn.add(createSectionLabel("Tools"))
         listOf(
-            controls.selectButton,
             controls.drawingButton,
             controls.erasingButton,
             controls.fillButton,
+            controls.shapeButton,
             controls.textButton,
             controls.balloonButton,
-            controls.shapeButton
+            controls.selectButton
         ).forEach { button ->
             addStackedButton(buttonColumn, button)
         }
@@ -240,7 +239,7 @@ internal class DrawingToolbarPanel(
 
         buttonColumn.add(createSectionSeparator())
         buttonColumn.add(createSectionLabel("View"))
-        listOf(controls.overlayButton, controls.passThroughButton, controls.gridButton).forEach { button ->
+        listOf(controls.overlayButton, controls.gridButton, controls.passThroughButton).forEach { button ->
             addStackedButton(buttonColumn, button)
         }
 

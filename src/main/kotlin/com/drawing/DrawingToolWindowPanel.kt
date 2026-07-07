@@ -436,11 +436,11 @@ class DrawingToolWindowPanel(
             activeTool == DrawingToolMode.FILL,
             DrawingToolMode.FILL
         )
-        DrawingStateBinder.applyShapeToolButton(
+        DrawingStateBinder.applyTextToolButton(
             button = controls.textButton,
             active = activeTool == DrawingToolMode.SHAPES && canvasPanel.getSelectedShapeKind() == ShapeKind.TEXT
         )
-        DrawingStateBinder.applyShapeToolButton(
+        DrawingStateBinder.applyBalloonToolButton(
             button = controls.balloonButton,
             active = activeTool == DrawingToolMode.SHAPES && canvasPanel.getSelectedShapeKind() == ShapeKind.BALLOON
         )

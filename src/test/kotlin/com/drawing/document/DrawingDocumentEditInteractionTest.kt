@@ -1,7 +1,10 @@
 package com.drawing.document
 
 import com.drawing.AnchorPoint
+import com.drawing.AnnotationPath
+import com.drawing.AnnotationTextLayout
 import com.drawing.AnnotationKind
+import com.drawing.BalloonTextStyle
 import com.drawing.DrawingCoordinateMapper
 import com.drawing.DrawingCanvasController
 import com.drawing.DrawingDocumentSync
@@ -114,6 +117,53 @@ class DrawingDocumentEditInteractionTest {
     }
 
     @Test
+    fun `drawing stays attached to original line when enter is pressed at its line end`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {
+                println("a")
+            }
+            """.trimIndent()
+        )
+        val anchor = document.anchorAtLineEnd(line = 1, dx = 16, dy = 5)
+        val originalColumn = anchor.column
+        val stroke = strokeWith(anchor)
+
+        val event = document.insert(document.lineEndOffset(1), "\n    println(\"below\")")
+
+        mapper.remapAnchorsForDocumentChange(document.document, event, listOf(stroke))
+
+        assertEquals(1, anchor.line, "Pressing Enter after anchored code should keep the drawing on that code line")
+        assertEquals(originalColumn, anchor.column)
+        assertEquals(document.lineEndOffset(1), anchor.offset)
+        assertEquals(16, anchor.dx)
+        assertEquals(5, anchor.dy)
+    }
+
+    @Test
+    fun `drawing stays attached to original line when multiline text is pasted at its line end`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {
+                println("a")
+            }
+            """.trimIndent()
+        )
+        val anchor = document.anchorAtLineEnd(line = 1, dx = 16, dy = 5)
+        val stroke = strokeWith(anchor)
+
+        val event = document.insert(document.lineEndOffset(1), " // still same line\n    println(\"below\")")
+
+        mapper.remapAnchorsForDocumentChange(document.document, event, listOf(stroke))
+
+        assertEquals(1, anchor.line, "Pasting multiple lines after anchored code should not move the drawing to the pasted lower line")
+        assertEquals(document.lineEndColumn(1), anchor.column)
+        assertEquals(document.lineEndOffset(1), anchor.offset)
+        assertEquals(16, anchor.dx)
+        assertEquals(5, anchor.dy)
+    }
+
+    @Test
     fun `drawing follows code upward when a line above it is deleted`() {
         val document = EditableTestDocument(
             """
@@ -133,6 +183,30 @@ class DrawingDocumentEditInteractionTest {
         assertEquals(document.lineEndColumn(1), anchor.column)
         assertEquals(document.lineEndOffset(1), anchor.offset)
         assertEquals(18, anchor.dx)
+    }
+
+    @Test
+    fun `drawing offset stays normalized when the following line is joined into its anchor line`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {
+                println("a")
+                println("b")
+            }
+            """.trimIndent()
+        )
+        val anchor = document.anchorAtLineEnd(line = 1, dx = 18, dy = 4)
+        val stroke = strokeWith(anchor)
+
+        val event = document.delete(document.lineEndOffset(1), document.lineStartOffset(2))
+
+        mapper.remapAnchorsForDocumentChange(document.document, event, listOf(stroke))
+
+        assertEquals(1, anchor.line)
+        assertEquals(document.lineEndColumn(1), anchor.column)
+        assertEquals(document.lineEndOffset(1), anchor.offset, "Joined lines should leave the anchor offset at the new visual line end")
+        assertEquals(18, anchor.dx)
+        assertEquals(4, anchor.dy)
     }
 
     @Test
@@ -776,6 +850,56 @@ class DrawingDocumentEditInteractionTest {
     }
 
     @Test
+    fun `raster fill and annotation stay attached to original line when enter is pressed at their anchor`() {
+        val document = EditableTestDocument(
+            """
+            before()
+            target()
+            after()
+            """.trimIndent()
+        )
+        val canvas = JPanel()
+        val editor = TestEditor(document, canvas)
+        val mapper = DrawingCoordinateMapper(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            minCodeClearancePx = 8
+        )
+        val store = DrawingStrokeStore(DrawingStateService(testProject("C:/work/drawing-project")))
+        val fill = rasterFill(document, line = 1, dx = 96, dy = 2, width = 80, height = 8)
+        val annotation = AnnotationPath(
+            id = 707L,
+            text = "Note",
+            color = Color.ORANGE,
+            anchor = document.anchorAtLineEnd(line = 1, dx = 180, dy = 2),
+            width = 96,
+            height = 8,
+            kind = AnnotationKind.TEXT,
+            style = BalloonTextStyle.SOLID,
+            objectGroupId = 707L
+        )
+        store.setRasterFills(document.document, mutableListOf(fill))
+        store.setAnnotations(document.document, mutableListOf(annotation))
+        val beforeFillPoint = mapper.toContentPoint(fill.anchor.copy())!!
+        val beforeAnnotationPoint = mapper.toContentPoint(annotation.anchor.copy())!!
+        val sync = documentSync(document, editor, mapper, store)
+
+        sync.bindDocumentListener(document.document)
+        document.insert(document.lineEndOffset(1), "\ninsertedBelow()")
+        sync.cancelPendingPersistence()
+        sync.unbindDocumentListener()
+
+        val afterFillPoint = mapper.toContentPoint(fill.anchor.copy())!!
+        val afterAnnotationPoint = mapper.toContentPoint(annotation.anchor.copy())!!
+        assertEquals(1, fill.anchor.line)
+        assertEquals(document.lineEndOffset(1), fill.anchor.offset)
+        assertEquals(beforeFillPoint, afterFillPoint)
+        assertEquals(1, annotation.anchor.line)
+        assertEquals(document.lineEndOffset(1), annotation.anchor.offset)
+        assertEquals(beforeAnnotationPoint, afterAnnotationPoint)
+    }
+
+    @Test
     fun `raster fill shifts right when lower occupied code grows underneath`() {
         val document = EditableTestDocument(
             """
@@ -1222,6 +1346,229 @@ class DrawingDocumentEditInteractionTest {
     }
 
     @Test
+    fun `erasing text annotation removes only the hit character`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {}
+            """.trimIndent()
+        )
+        val canvas = JPanel()
+        val editor = TestEditor(document, canvas)
+        val mapper = DrawingCoordinateMapper(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            minCodeClearancePx = 8
+        )
+        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
+        val strokeStore = DrawingStrokeStore(stateService)
+        val workspace = DrawingStrokeWorkspace(
+            currentDocument = { editor.editor.document },
+            strokeStore = strokeStore,
+            coordinateMapper = mapper,
+            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
+        )
+        val historyStore = DrawingHistoryStore()
+        val currentStrokes = strokeStore.currentStrokes(document.document)
+        val annotation = AnnotationPath(
+            id = 501L,
+            text = "HELLO",
+            color = Color.MAGENTA,
+            anchor = document.anchorAtLineEnd(line = 0, dx = 72, dy = 32),
+            width = 150,
+            height = 48,
+            kind = AnnotationKind.TEXT,
+            style = BalloonTextStyle.SOLID,
+            objectGroupId = 501L
+        )
+        strokeStore.setAnnotations(document.document, mutableListOf(annotation))
+        val sync = documentSync(document, editor, mapper, strokeStore)
+        val controller = drawingController(
+            canvas = canvas,
+            editor = editor,
+            currentStrokes = currentStrokes,
+            historyStore = historyStore,
+            workspace = workspace,
+            sync = sync,
+            mapper = mapper,
+            selectedShapeKind = ShapeKind.TEXT
+        )
+
+        try {
+            controller.handleErasePressed(annotationCharacterCenter(workspace, annotation, characterIndex = 1))
+
+            val currentAnnotation = workspace.currentAnnotations().single()
+            assertEquals("HLLO", currentAnnotation.text, "Only the targeted text annotation character should be erased")
+            assertEquals(AnnotationKind.TEXT, currentAnnotation.kind)
+            assertEquals(true, historyStore.canUndo(document.document))
+        } finally {
+            sync.cancelPendingPersistence()
+        }
+    }
+
+    @Test
+    fun `empty erase gesture does not create undo history`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {}
+            """.trimIndent()
+        )
+        val canvas = JPanel()
+        val editor = TestEditor(document, canvas)
+        val mapper = DrawingCoordinateMapper(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            minCodeClearancePx = 8
+        )
+        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
+        val strokeStore = DrawingStrokeStore(stateService)
+        val workspace = DrawingStrokeWorkspace(
+            currentDocument = { editor.editor.document },
+            strokeStore = strokeStore,
+            coordinateMapper = mapper,
+            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
+        )
+        val historyStore = DrawingHistoryStore()
+        val currentStrokes = strokeStore.currentStrokes(document.document)
+        val sync = documentSync(document, editor, mapper, strokeStore)
+        val controller = drawingController(
+            canvas = canvas,
+            editor = editor,
+            currentStrokes = currentStrokes,
+            historyStore = historyStore,
+            workspace = workspace,
+            sync = sync,
+            mapper = mapper,
+            selectedShapeKind = ShapeKind.TEXT
+        )
+
+        try {
+            controller.handleErasePressed(Point(240, 120))
+            controller.handleEraseDragged(Point(240, 120), Point(260, 140))
+            controller.handleEraseReleased()
+
+            assertEquals(false, historyStore.canUndo(document.document), "Erasing empty space should not create a no-op undo step")
+        } finally {
+            sync.cancelPendingPersistence()
+        }
+    }
+
+    @Test
+    fun `erasing balloon annotation text keeps the balloon object`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {}
+            """.trimIndent()
+        )
+        val canvas = JPanel()
+        val editor = TestEditor(document, canvas)
+        val mapper = DrawingCoordinateMapper(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            minCodeClearancePx = 8
+        )
+        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
+        val strokeStore = DrawingStrokeStore(stateService)
+        val workspace = DrawingStrokeWorkspace(
+            currentDocument = { editor.editor.document },
+            strokeStore = strokeStore,
+            coordinateMapper = mapper,
+            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
+        )
+        val historyStore = DrawingHistoryStore()
+        val currentStrokes = strokeStore.currentStrokes(document.document)
+        val annotation = AnnotationPath(
+            id = 777L,
+            text = "BALLOON",
+            color = Color.BLUE,
+            anchor = document.anchorAtLineEnd(line = 0, dx = 72, dy = 32),
+            width = 180,
+            height = 80,
+            kind = AnnotationKind.BALLOON,
+            style = BalloonTextStyle.OUTLINE,
+            objectGroupId = 777L
+        )
+        strokeStore.setAnnotations(document.document, mutableListOf(annotation))
+        val sync = documentSync(document, editor, mapper, strokeStore)
+        val controller = drawingController(
+            canvas = canvas,
+            editor = editor,
+            currentStrokes = currentStrokes,
+            historyStore = historyStore,
+            workspace = workspace,
+            sync = sync,
+            mapper = mapper,
+            selectedShapeKind = ShapeKind.BALLOON
+        )
+
+        try {
+            controller.handleErasePressed(annotationCharacterCenter(workspace, annotation, characterIndex = 0))
+
+            val currentAnnotation = workspace.currentAnnotations().single()
+            assertEquals("ALLOON", currentAnnotation.text, "Only the hit balloon text character should be erased")
+            assertEquals(AnnotationKind.BALLOON, currentAnnotation.kind, "The balloon annotation should remain semantic")
+            assertEquals(BalloonTextStyle.OUTLINE, currentAnnotation.style)
+        } finally {
+            sync.cancelPendingPersistence()
+        }
+    }
+
+    @Test
+    fun `erasing final annotation character removes the annotation`() {
+        val document = EditableTestDocument(
+            """
+            fun main() {}
+            """.trimIndent()
+        )
+        val canvas = JPanel()
+        val editor = TestEditor(document, canvas)
+        val mapper = DrawingCoordinateMapper(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            minCodeClearancePx = 8
+        )
+        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
+        val strokeStore = DrawingStrokeStore(stateService)
+        val workspace = DrawingStrokeWorkspace(
+            currentDocument = { editor.editor.document },
+            strokeStore = strokeStore,
+            coordinateMapper = mapper,
+            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
+        )
+        val historyStore = DrawingHistoryStore()
+        val currentStrokes = strokeStore.currentStrokes(document.document)
+        val annotation = AnnotationPath(
+            id = 778L,
+            text = "A",
+            color = Color.BLUE,
+            anchor = document.anchorAtLineEnd(line = 0, dx = 72, dy = 32),
+            width = 80,
+            height = 48,
+            kind = AnnotationKind.TEXT,
+            objectGroupId = 778L
+        )
+        strokeStore.setAnnotations(document.document, mutableListOf(annotation))
+        val sync = documentSync(document, editor, mapper, strokeStore)
+        val controller = drawingController(
+            canvas = canvas,
+            editor = editor,
+            currentStrokes = currentStrokes,
+            historyStore = historyStore,
+            workspace = workspace,
+            sync = sync,
+            mapper = mapper,
+            selectedShapeKind = ShapeKind.TEXT
+        )
+
+        try {
+            controller.handleErasePressed(annotationCharacterCenter(workspace, annotation, characterIndex = 0))
+
+            assertEquals(0, workspace.currentAnnotations().size, "An annotation should be removed once all text is erased")
+        } finally {
+            sync.cancelPendingPersistence()
+        }
+    }
+
+    @Test
     fun `selected raster fill moves by view delta and can be undone`() {
         val document = EditableTestDocument(
             """
@@ -1481,329 +1828,6 @@ class DrawingDocumentEditInteractionTest {
             assertEquals(0, currentStrokes.size, "Tiny balloon drags should not commit a shape")
             assertEquals(false, balloonCommitCalled, "Tiny balloon drags should not open the text editor")
             assertEquals(null, previewHolder, "Shape preview should still be cleared after release")
-        } finally {
-            sync.cancelPendingPersistence()
-        }
-    }
-
-    @Test
-    fun `erasing semantic text removes only hit characters without showing generated strokes`() {
-        val document = EditableTestDocument(
-            """
-            fun main() {}
-            """.trimIndent()
-        )
-        val canvas = JPanel()
-        val editor = TestEditor(document, canvas)
-        val mapper = DrawingCoordinateMapper(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            minCodeClearancePx = 8
-        )
-        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
-        val strokeStore = DrawingStrokeStore(stateService)
-        val workspace = DrawingStrokeWorkspace(
-            currentDocument = { editor.editor.document },
-            strokeStore = strokeStore,
-            coordinateMapper = mapper,
-            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
-        )
-        val historyStore = DrawingHistoryStore()
-        val currentStrokes = strokeStore.currentStrokes(document.document)
-        val textGroupId = 501L
-        val textStroke = groupedRigidLineStroke(
-            document = document,
-            line = 0,
-            startDx = 64,
-            startDy = 10,
-            endDx = 220,
-            endDy = 10,
-            kind = ShapeKind.TEXT,
-            objectGroupId = textGroupId
-        ).apply {
-            annotationText = "Text label"
-            annotationBounds = Rectangle(56, 6, 120, 36)
-        }
-        currentStrokes += textStroke
-        val sync = documentSync(document, editor, mapper, strokeStore)
-        val controller = DrawingCanvasController(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            currentStrokesProvider = { currentStrokes },
-            historyStore = historyStore,
-            strokeWorkspace = workspace,
-            documentSync = sync,
-            coordinateMapper = mapper,
-            strokePathTools = DrawingStrokePathTools(
-                eraseRadius = 10.0,
-                drawSampleSpacingPx = 4.0,
-                freehandSimplifyTolerancePx = 2.0,
-                freehandSimplifyMinPoints = 3,
-                toViewPoint = { anchor: AnchorPoint -> mapper.toViewPoint(anchor) }
-            ),
-            drawColorProvider = { Color.MAGENTA },
-            selectedShapeKindProvider = { ShapeKind.TEXT },
-            currentStrokeGetter = { null },
-            currentStrokeSetter = { _ -> },
-            shapePreviewGetter = { null },
-            shapePreviewSetter = { _ -> },
-            refreshHistoryState = {},
-            canvasPadding = 12,
-            dirtyPaddingPx = 12,
-            eraseRadius = 10.0,
-            freehandMinPointDistancePx = 4.0,
-            eraseMinMovePx = 2.0,
-            shapeEdgeSpacing = 8.0,
-            ellipseSegments = 24
-        )
-
-        try {
-            val erasePoint = mapper.toViewPoint(textStroke.points.first())!!.let { Point(it.x + 72, it.y) }
-            controller.handleErasePressed(erasePoint)
-
-            assertEquals(true, currentStrokes.isNotEmpty(), "Erasing semantic text should not delete the whole label")
-            assertEquals(
-                true,
-                currentStrokes.all { it.objectGroupId == textGroupId },
-                "The semantic text anchors should stay associated with the same text object"
-            )
-            assertEquals(
-                true,
-                currentStrokes.all { it.annotationText != null && it.annotationBounds != null },
-                "Touched semantic text should stay semantic so generated letter strokes are not painted"
-            )
-            assertEquals(
-                true,
-                currentStrokes.single().annotationText!!.length < "Text label".length,
-                "Only the character hit by the eraser should be removed from the semantic text"
-            )
-        } finally {
-            sync.cancelPendingPersistence()
-        }
-    }
-
-    @Test
-    fun `erasing balloon text removes hit characters without deleting the balloon`() {
-        val document = EditableTestDocument(
-            """
-            fun main() {}
-            """.trimIndent()
-        )
-        val canvas = JPanel()
-        val editor = TestEditor(document, canvas)
-        val mapper = DrawingCoordinateMapper(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            minCodeClearancePx = 8
-        )
-        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
-        val strokeStore = DrawingStrokeStore(stateService)
-        val workspace = DrawingStrokeWorkspace(
-            currentDocument = { editor.editor.document },
-            strokeStore = strokeStore,
-            coordinateMapper = mapper,
-            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
-        )
-        val historyStore = DrawingHistoryStore()
-        val currentStrokes = strokeStore.currentStrokes(document.document)
-        val objectGroupId = 777L
-        val balloonOutline = groupedRigidLineStroke(
-            document = document,
-            line = 0,
-            startDx = 56,
-            startDy = 8,
-            endDx = 220,
-            endDy = 8,
-            kind = ShapeKind.BALLOON,
-            objectGroupId = objectGroupId
-        )
-        val balloonText = groupedRigidLineStroke(
-            document = document,
-            line = 0,
-            startDx = 84,
-            startDy = 24,
-            endDx = 204,
-            endDy = 24,
-            kind = ShapeKind.TEXT,
-            objectGroupId = objectGroupId
-        ).apply {
-            annotationText = "Balloon"
-            annotationBounds = Rectangle(80, 14, 112, 34)
-        }
-        currentStrokes += balloonOutline
-        currentStrokes += balloonText
-        val sync = documentSync(document, editor, mapper, strokeStore)
-        val controller = DrawingCanvasController(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            currentStrokesProvider = { currentStrokes },
-            historyStore = historyStore,
-            strokeWorkspace = workspace,
-            documentSync = sync,
-            coordinateMapper = mapper,
-            strokePathTools = DrawingStrokePathTools(
-                eraseRadius = 10.0,
-                drawSampleSpacingPx = 4.0,
-                freehandSimplifyTolerancePx = 2.0,
-                freehandSimplifyMinPoints = 3,
-                toViewPoint = { anchor: AnchorPoint -> mapper.toViewPoint(anchor) }
-            ),
-            drawColorProvider = { Color.MAGENTA },
-            selectedShapeKindProvider = { ShapeKind.BALLOON },
-            currentStrokeGetter = { null },
-            currentStrokeSetter = { _ -> },
-            shapePreviewGetter = { null },
-            shapePreviewSetter = { _ -> },
-            refreshHistoryState = {},
-            canvasPadding = 12,
-            dirtyPaddingPx = 12,
-            eraseRadius = 10.0,
-            freehandMinPointDistancePx = 4.0,
-            eraseMinMovePx = 2.0,
-            shapeEdgeSpacing = 8.0,
-            ellipseSegments = 24
-        )
-
-        try {
-            val erasePoint = mapper.toViewPoint(balloonText.points.first())!!.let { Point(it.x + 48, it.y) }
-            controller.handleErasePressed(erasePoint)
-
-            assertEquals(true, currentStrokes.isNotEmpty(), "Erasing balloon text should not delete the whole balloon object")
-            assertEquals(
-                true,
-                currentStrokes.any { it.kind == ShapeKind.BALLOON },
-                "The balloon outline should remain when only the text ink is erased"
-            )
-            val remainingText = currentStrokes.filter { it.kind == ShapeKind.TEXT }
-            assertEquals(true, remainingText.isNotEmpty(), "The balloon text strokes should remain as semantic text anchors")
-            assertEquals(
-                true,
-                remainingText.all { it.annotationText != null && it.annotationBounds != null },
-                "Touched balloon text should stay semantic so generated letter strokes are not painted"
-            )
-            assertEquals(
-                true,
-                remainingText.all { it.annotationText!!.length < "Balloon".length },
-                "Only hit balloon text characters should be removed from the semantic label"
-            )
-        } finally {
-            sync.cancelPendingPersistence()
-        }
-    }
-
-    @Test
-    fun `erasing one semantic text group leaves a nearby text group untouched`() {
-        val document = EditableTestDocument(
-            """
-            fun main() {}
-            """.trimIndent()
-        )
-        val canvas = JPanel()
-        val editor = TestEditor(document, canvas)
-        val mapper = DrawingCoordinateMapper(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            minCodeClearancePx = 8
-        )
-        val stateService = DrawingStateService(testProject("C:/work/drawing-project"))
-        val strokeStore = DrawingStrokeStore(stateService)
-        val workspace = DrawingStrokeWorkspace(
-            currentDocument = { editor.editor.document },
-            strokeStore = strokeStore,
-            coordinateMapper = mapper,
-            strokeRenderer = DrawingStrokeRenderer(canvasPadding = 12, gridExtendLeftPx = 0)
-        )
-        val historyStore = DrawingHistoryStore()
-        val currentStrokes = strokeStore.currentStrokes(document.document)
-        val firstGroupId = 901L
-        val secondGroupId = 902L
-        val firstText = groupedRigidLineStroke(
-            document = document,
-            line = 0,
-            startDx = 64,
-            startDy = 10,
-            endDx = 164,
-            endDy = 10,
-            kind = ShapeKind.TEXT,
-            objectGroupId = firstGroupId
-        ).apply {
-            annotationText = "First"
-            annotationBounds = Rectangle(56, 6, 88, 36)
-        }
-        val secondText = groupedRigidLineStroke(
-            document = document,
-            line = 0,
-            startDx = 220,
-            startDy = 10,
-            endDx = 340,
-            endDy = 10,
-            kind = ShapeKind.TEXT,
-            objectGroupId = secondGroupId
-        ).apply {
-            annotationText = "Second"
-            annotationBounds = Rectangle(212, 6, 104, 36)
-        }
-        currentStrokes += firstText
-        currentStrokes += secondText
-        val sync = documentSync(document, editor, mapper, strokeStore)
-        val controller = DrawingCanvasController(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            currentStrokesProvider = { currentStrokes },
-            historyStore = historyStore,
-            strokeWorkspace = workspace,
-            documentSync = sync,
-            coordinateMapper = mapper,
-            strokePathTools = DrawingStrokePathTools(
-                eraseRadius = 10.0,
-                drawSampleSpacingPx = 4.0,
-                freehandSimplifyTolerancePx = 2.0,
-                freehandSimplifyMinPoints = 3,
-                toViewPoint = { anchor: AnchorPoint -> mapper.toViewPoint(anchor) }
-            ),
-            drawColorProvider = { Color.MAGENTA },
-            selectedShapeKindProvider = { ShapeKind.TEXT },
-            currentStrokeGetter = { null },
-            currentStrokeSetter = { _ -> },
-            shapePreviewGetter = { null },
-            shapePreviewSetter = { _ -> },
-            refreshHistoryState = {},
-            canvasPadding = 12,
-            dirtyPaddingPx = 12,
-            eraseRadius = 10.0,
-            freehandMinPointDistancePx = 4.0,
-            eraseMinMovePx = 2.0,
-            shapeEdgeSpacing = 8.0,
-            ellipseSegments = 24
-        )
-
-        try {
-            controller.handleErasePressed(Point(0, mapper.toViewPoint(firstText.points.first())!!.y))
-
-            assertEquals(2, currentStrokes.size, "Erasing on the same line but away from text should not remove semantic text")
-
-            val firstBounds = workspace.buildStrokeGeometryContent(firstText)!!.bounds
-            controller.handleErasePressed(Point(firstBounds.x + firstBounds.width + 20, firstBounds.y + firstBounds.height / 2))
-
-            assertEquals(2, currentStrokes.size, "Erasing near but outside drawn text should not remove semantic text")
-
-            val erasePoint = mapper.toViewPoint(firstText.points.first())!!.let { Point(it.x + 36, it.y) }
-            controller.handleErasePressed(erasePoint)
-
-            assertEquals(
-                true,
-                currentStrokes.any { it.objectGroupId == secondGroupId && it.annotationText == "Second" },
-                "Nearby text should remain intact and semantic"
-            )
-            assertEquals(
-                true,
-                currentStrokes.any {
-                    it.objectGroupId == firstGroupId &&
-                        it.annotationText != null &&
-                        it.annotationText!!.length < "First".length
-                },
-                "Only the targeted semantic text should lose a hit character while staying semantic"
-            )
         } finally {
             sync.cancelPendingPersistence()
         }
@@ -2094,8 +2118,66 @@ class DrawingDocumentEditInteractionTest {
             currentFilePath = { "C:/work/drawing-project/src/Main.py" },
             currentStrokes = { store.currentStrokes(document.document) },
             currentRasterFills = { store.currentRasterFills(document.document) },
+            currentAnnotations = { store.currentAnnotations(document.document) },
             onDocumentStrokesRemapped = {},
             repaintCanvas = {}
+        )
+    }
+
+    private fun drawingController(
+        canvas: JPanel,
+        editor: TestEditor,
+        currentStrokes: MutableList<StrokePath>,
+        historyStore: DrawingHistoryStore,
+        workspace: DrawingStrokeWorkspace,
+        sync: DrawingDocumentSync,
+        mapper: DrawingCoordinateMapper,
+        selectedShapeKind: ShapeKind
+    ): DrawingCanvasController {
+        return DrawingCanvasController(
+            canvas = canvas,
+            editorProvider = { editor.editor },
+            currentStrokesProvider = { currentStrokes },
+            historyStore = historyStore,
+            strokeWorkspace = workspace,
+            documentSync = sync,
+            coordinateMapper = mapper,
+            strokePathTools = DrawingStrokePathTools(
+                eraseRadius = 10.0,
+                drawSampleSpacingPx = 4.0,
+                freehandSimplifyTolerancePx = 2.0,
+                freehandSimplifyMinPoints = 3,
+                toViewPoint = { anchor: AnchorPoint -> mapper.toViewPoint(anchor) }
+            ),
+            drawColorProvider = { Color.MAGENTA },
+            selectedShapeKindProvider = { selectedShapeKind },
+            currentStrokeGetter = { null },
+            currentStrokeSetter = { _ -> },
+            shapePreviewGetter = { null },
+            shapePreviewSetter = { _ -> },
+            refreshHistoryState = {},
+            canvasPadding = 12,
+            dirtyPaddingPx = 12,
+            eraseRadius = 10.0,
+            freehandMinPointDistancePx = 4.0,
+            eraseMinMovePx = 2.0,
+            shapeEdgeSpacing = 8.0,
+            ellipseSegments = 24
+        )
+    }
+
+    private fun annotationCharacterCenter(
+        workspace: DrawingStrokeWorkspace,
+        annotation: AnnotationPath,
+        characterIndex: Int
+    ): Point {
+        val annotationBounds = requireNotNull(workspace.annotationContentBounds(annotation))
+        val characterBounds = requireNotNull(
+            AnnotationTextLayout.characterBounds(annotation).firstOrNull { it.index == characterIndex }
+        )
+        return Point(
+            annotationBounds.x + characterBounds.bounds.x + characterBounds.bounds.width / 2,
+            annotationBounds.y + characterBounds.bounds.y + characterBounds.bounds.height / 2
         )
     }
 

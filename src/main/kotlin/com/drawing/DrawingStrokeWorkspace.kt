@@ -190,11 +190,9 @@ class DrawingStrokeWorkspace(
         collapsedFoldRegions: List<CollapsedFoldRegionSnapshot>
     ): List<StrokePath> {
         val visible = mutableListOf<StrokePath>()
-        val visibleLegacyTextGroups = linkedSetOf<Long>()
         val boundsMap = currentStrokeBounds()
         for (stroke in currentStrokes()) {
             if (DrawingViewportTools.isStrokeHiddenByCollapsedFold(stroke, collapsedFoldRegions)) continue
-            if (stroke.annotationText != null && !visibleLegacyTextGroups.add(legacyTextGroupKey(stroke))) continue
             val lineBounds = boundsMap[stroke.id]
                 ?: DrawingViewportTools.computeStrokeLineBounds(stroke)?.also { boundsMap[stroke.id] = it }
                 ?: continue
@@ -314,10 +312,6 @@ class DrawingStrokeWorkspace(
             height = height,
             foldLayoutSignature = coordinateMapper.currentFoldLayoutSignature()
         )
-    }
-
-    private fun legacyTextGroupKey(stroke: StrokePath): Long {
-        return if (stroke.objectGroupId != 0L) stroke.objectGroupId else stroke.id
     }
 
     private data class CollapsedFoldMarkersCacheKey(

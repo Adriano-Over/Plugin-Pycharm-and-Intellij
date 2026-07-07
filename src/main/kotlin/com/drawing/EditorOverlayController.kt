@@ -16,6 +16,7 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import javax.swing.JLayeredPane
 import javax.swing.JRootPane
+import javax.swing.JScrollPane
 import javax.swing.SwingUtilities
 
 class EditorOverlayController(
@@ -38,6 +39,7 @@ class EditorOverlayController(
 
     private val overlayExtendLeftPx = 2
     private val overlayTrimRightPx = 8
+    private val overlayTrimBottomFallbackPx = 18
 
     private val messageBusConnection = project.messageBus.connect(this)
 
@@ -205,17 +207,29 @@ class EditorOverlayController(
 
         val visibleArea = editor.scrollingModel.visibleArea
         val editorOnLayered = SwingUtilities.convertRectangle(editorComponent, visibleArea, layeredPane)
+        val bottomTrim = horizontalScrollBarClearance(editorComponent)
         val inset = 0
         val bounded = Rectangle(
             editorOnLayered.x + inset - overlayExtendLeftPx,
             editorOnLayered.y + inset,
             (editorOnLayered.width - inset * 2 + overlayExtendLeftPx - overlayTrimRightPx).coerceAtLeast(1),
-            (editorOnLayered.height - inset * 2).coerceAtLeast(1)
+            (editorOnLayered.height - inset * 2 - bottomTrim).coerceAtLeast(1)
         )
 
         canvasPanel.setBounds(bounded.x, bounded.y, bounded.width, bounded.height)
         layeredPane.revalidate()
         layeredPane.repaint()
+    }
+
+    private fun horizontalScrollBarClearance(editorComponent: Component): Int {
+        val scrollPane = SwingUtilities.getAncestorOfClass(JScrollPane::class.java, editorComponent) as? JScrollPane
+            ?: return overlayTrimBottomFallbackPx
+        val horizontalScrollBar = scrollPane.horizontalScrollBar ?: return overlayTrimBottomFallbackPx
+        if (!horizontalScrollBar.isVisible) return 0
+        return horizontalScrollBar.height
+            .takeIf { it > 0 }
+            ?: horizontalScrollBar.preferredSize?.height?.takeIf { it > 0 }
+            ?: overlayTrimBottomFallbackPx
     }
 
     override fun dispose() {
