@@ -123,10 +123,10 @@ class DrawingCanvasPanel(
         currentRasterFills = ::currentRasterFills,
         currentAnnotations = ::currentAnnotations,
         onDocumentStrokesRemapped = { document ->
-            strokeWorkspace.rebuildStrokeBounds(document)
-            strokeWorkspace.resetStrokeGeometryCache(document)
+            strokeWorkspace.resetDocumentLayoutCaches(document)
         },
-        repaintCanvas = ::repaint
+        repaintCanvas = ::repaint,
+        documentChangeUiDebounceMs = 45
     )
 
     private val canvasController = DrawingCanvasController(
@@ -223,7 +223,8 @@ class DrawingCanvasPanel(
             onDrawGestureStarted = coordinateMapper::beginFreehandStraightWrap,
             onDrawGestureFinished = coordinateMapper::endFreehandStraightWrap,
             onMouseWheel = ::forwardMouseWheelToEditor,
-            onPassthroughMouseEvent = ::forwardMouseEventToEditor
+            onPassthroughMouseEvent = ::forwardMouseEventToEditor,
+            onTextEditorOutsidePressed = ::finishActiveTextEditorFromOutsideClick
         )
 
         addMouseListener(inputController)
@@ -425,7 +426,7 @@ class DrawingCanvasPanel(
                 1,
                 true
             )
-            toolTipText = "Type text. Enter commits, Shift+Enter adds a new line, Esc cancels."
+            toolTipText = "Type text. Enter or outside click commits, Shift+Enter adds a new line, Esc cancels."
             setBounds(editorBounds)
         }
 
@@ -441,6 +442,11 @@ class DrawingCanvasPanel(
             revalidate()
             repaintWithPadding(editorBounds, dirtyPaddingPx)
             onCommit(text)
+        }
+
+        fun finishTypedTextOrCancel() {
+            val typedText = textArea.text
+            finish(if (typedText.isBlank()) null else typedText)
         }
 
         textArea.getInputMap(JComponent.WHEN_FOCUSED)
@@ -469,12 +475,12 @@ class DrawingCanvasPanel(
 
         textArea.addFocusListener(object : FocusAdapter() {
             override fun focusLost(event: FocusEvent?) {
-                finish(null)
+                finishTypedTextOrCancel()
             }
         })
 
         activeBalloonTextEditor = textArea
-        activeBalloonTextEditorCommit = { finish(textArea.text) }
+        activeBalloonTextEditorCommit = ::finishTypedTextOrCancel
         add(textArea, 0)
         revalidate()
         repaintWithPadding(editorBounds, dirtyPaddingPx)
@@ -483,6 +489,13 @@ class DrawingCanvasPanel(
                 textArea.requestFocus()
             }
         }
+    }
+
+    private fun finishActiveTextEditorFromOutsideClick(point: Point): Boolean {
+        val textEditor = activeBalloonTextEditor ?: return false
+        if (textEditor.bounds.contains(point)) return false
+        activeBalloonTextEditorCommit?.invoke()
+        return true
     }
 
     private fun clampEditorBounds(bounds: Rectangle): Rectangle {

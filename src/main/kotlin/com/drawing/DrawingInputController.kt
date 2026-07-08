@@ -27,7 +27,8 @@ class DrawingInputController(
     private val onDrawGestureStarted: (Point) -> Unit,
     private val onDrawGestureFinished: () -> Unit,
     private val onMouseWheel: (MouseWheelEvent) -> Unit,
-    private val onPassthroughMouseEvent: (MouseEvent) -> Unit
+    private val onPassthroughMouseEvent: (MouseEvent) -> Unit,
+    private val onTextEditorOutsidePressed: (Point) -> Boolean = { false }
 ) : MouseAdapter() {
 
     private var shapeStartPoint: Point? = null
@@ -42,6 +43,15 @@ class DrawingInputController(
     }
 
     override fun mousePressed(e: MouseEvent) {
+        if (onTextEditorOutsidePressed(e.point)) {
+            shapeStartPoint = null
+            lastDragPoint = null
+            onToolPreviewPointChanged(null)
+            onDrawGestureFinished()
+            e.consume()
+            return
+        }
+
         if (isPassThroughEnabled()) {
             passThrough(e)
             return

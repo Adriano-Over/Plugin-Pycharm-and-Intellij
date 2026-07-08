@@ -582,15 +582,9 @@ class DrawingCanvasPainter(
     ) {
         // Paint the stroke as one continuous geometry.
         //
-        // The old fold-aware branch split strokes point-by-point when an anchor offset
-        // landed inside a collapsed fold. That caused freehand strokes to break into
-        // fragments and caused shape strokes to disappear almost completely because
-        // shapes were not repainted after the split. It also read the editor folding
-        // model from Swing paint code, which triggered IntelliJ read-access errors.
-        //
-        // Collapsed-fold markers should be rebuilt later from a cached/read-action-safe
-        // model. The normal paint path must stay geometry-only and must not read
-        // foldingModel during paintComponent().
+        // Collapsed-fold markers are rebuilt from a cached/read-action-safe model.
+        // The normal paint path must stay geometry-only and must not read foldingModel
+        // during paintComponent().
         val geometry = if (preview) {
             strokeWorkspace.buildStrokeGeometryContent(stroke)
         } else {

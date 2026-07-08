@@ -2,7 +2,6 @@ package com.drawing
 
 import com.intellij.openapi.editor.Document
 import java.awt.Color
-import java.awt.Rectangle
 import java.util.WeakHashMap
 
 data class StrokeLineBounds(
@@ -18,25 +17,6 @@ class DrawingStrokeStore(
     private val annotationsByDocument = WeakHashMap<Document, MutableList<AnnotationPath>>()
     private val strokeBoundsByDocument = WeakHashMap<Document, MutableMap<Long, StrokeLineBounds>>()
     private val strokeGeometryByDocument = WeakHashMap<Document, MutableMap<Long, StrokeGeometryContent>>()
-
-    private fun SavedPoint.usesModernAnchorStorage(): Boolean {
-        if (anchorStorageVersion >= 1) return true
-
-        val looksLikeLegacyXAnchor = x != 0 &&
-            dx == 0 &&
-            offset == 0 &&
-            column == 0 &&
-            !outsideCode &&
-            afterLineEndPx == 0
-        if (looksLikeLegacyXAnchor) return false
-
-        return offset != 0 ||
-            column != 0 ||
-            dx != 0 ||
-            dy != 0 ||
-            outsideCode ||
-            afterLineEndPx != 0
-    }
 
     fun currentStrokes(document: Document?): MutableList<StrokePath> {
         if (document == null) return mutableListOf()
@@ -103,48 +83,14 @@ class DrawingStrokeStore(
                 color = Color(saved.color, true),
                 width = saved.width,
                 points = saved.points.map { point ->
-                    val modernAnchor = point.usesModernAnchorStorage()
-                    val anchor = if (modernAnchor) {
-                        AnchorPoint(
-                            line = point.line,
-                            column = point.column,
-                            dx = point.dx,
-                            dy = point.dy,
-                            offset = point.offset,
-                            outsideCode = point.outsideCode,
-                            afterLineEndPx = point.afterLineEndPx,
-                            foldHiddenHeightAbove = if (point.anchorStorageVersion >= 3) {
-                                point.foldHiddenHeightAbove
-                            } else {
-                                UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
-                            }
-                        )
-                    } else {
-                        AnchorPoint(
-                            line = point.line,
-                            column = 0,
-                            dx = point.x,
-                            dy = point.dy,
-                            offset = 0,
-                            outsideCode = point.outsideCode,
-                            afterLineEndPx = point.afterLineEndPx,
-                            foldHiddenHeightAbove = UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
-                        )
-                    }
+                    val anchor = point.toAnchor()
                     normalizeAnchor(document, anchor)
                     anchor
                 }.toMutableList(),
                 filled = saved.filled,
                 kind = saved.kind?.let { runCatching { ShapeKind.valueOf(it) }.getOrNull() },
                 objectGroupId = saved.objectGroupId,
-                rigidObjectAnchor = saved.rigidObjectAnchor,
-                annotationText = saved.annotationText,
-                annotationTextStyle = saved.annotationTextStyle?.let { runCatching { BalloonTextStyle.valueOf(it) }.getOrNull() },
-                annotationBounds = if (saved.annotationBoundsWidth > 0 && saved.annotationBoundsHeight > 0) {
-                    Rectangle(saved.annotationBoundsX, saved.annotationBoundsY, saved.annotationBoundsWidth, saved.annotationBoundsHeight)
-                } else {
-                    null
-                }
+                rigidObjectAnchor = saved.rigidObjectAnchor
             )
         }.toMutableList()
 
@@ -170,7 +116,17 @@ class DrawingStrokeStore(
             }
         }.toMutableList()
 
-        val loadedRasterFills = savedRasterFills.map { saved ->
+        val supportedRasterFills = savedRasterFills.filter { saved ->
+            RasterFillCodec.isSupportedPersistedRasterFill(saved.width, saved.height, saved.pngBase64)
+        }
+        val skippedRasterFills = savedRasterFills.size - supportedRasterFills.size
+        if (skippedRasterFills > 0) {
+            DrawingDiagnosticLog.warn(
+                "STORE",
+                "loadPersistedStrokes skipped unsupported rasterFills=$skippedRasterFills file=$filePath"
+            )
+        }
+        val loadedRasterFills = supportedRasterFills.map { saved ->
             val anchor = saved.anchor.toAnchor()
             normalizeAnchor(document, anchor)
             RasterFillPath(
@@ -182,8 +138,6 @@ class DrawingStrokeStore(
                 pngBase64 = saved.pngBase64,
                 objectGroupId = saved.objectGroupId
             )
-        }.filter { fill ->
-            fill.width > 0 && fill.height > 0 && fill.pngBase64.isNotBlank()
         }.toMutableList()
 
         strokesByDocument[document] = loaded
@@ -215,7 +169,6 @@ class DrawingStrokeStore(
                 width = stroke.width,
                 points = stroke.points.map { point ->
                     SavedPoint(
-                        anchorStorageVersion = 3,
                         line = point.line,
                         column = point.column,
                         dx = point.dx,
@@ -223,20 +176,13 @@ class DrawingStrokeStore(
                         offset = point.offset,
                         outsideCode = point.outsideCode,
                         afterLineEndPx = point.afterLineEndPx,
-                        foldHiddenHeightAbove = point.foldHiddenHeightAbove,
-                        x = 0
+                        foldHiddenHeightAbove = point.foldHiddenHeightAbove
                     )
                 }.toMutableList(),
                 filled = stroke.filled,
                 kind = stroke.kind?.name,
                 objectGroupId = stroke.objectGroupId,
-                rigidObjectAnchor = stroke.rigidObjectAnchor,
-                annotationText = stroke.annotationText,
-                annotationTextStyle = stroke.annotationTextStyle?.name,
-                annotationBoundsX = stroke.annotationBounds?.x ?: 0,
-                annotationBoundsY = stroke.annotationBounds?.y ?: 0,
-                annotationBoundsWidth = stroke.annotationBounds?.width ?: 0,
-                annotationBoundsHeight = stroke.annotationBounds?.height ?: 0
+                rigidObjectAnchor = stroke.rigidObjectAnchor
             )
         }
         val savedRasterFills = rasterFills.map { fill ->
@@ -276,17 +222,12 @@ class DrawingStrokeStore(
             offset = offset,
             outsideCode = outsideCode,
             afterLineEndPx = afterLineEndPx,
-            foldHiddenHeightAbove = if (anchorStorageVersion >= 3) {
-                foldHiddenHeightAbove
-            } else {
-                UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
-            }
+            foldHiddenHeightAbove = foldHiddenHeightAbove
         )
     }
 
     private fun AnchorPoint.toSavedPoint(): SavedPoint {
         return SavedPoint(
-            anchorStorageVersion = 3,
             line = line,
             column = column,
             dx = dx,
@@ -294,8 +235,7 @@ class DrawingStrokeStore(
             offset = offset,
             outsideCode = outsideCode,
             afterLineEndPx = afterLineEndPx,
-            foldHiddenHeightAbove = foldHiddenHeightAbove,
-            x = 0
+            foldHiddenHeightAbove = foldHiddenHeightAbove
         )
     }
 }

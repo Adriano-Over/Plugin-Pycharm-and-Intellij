@@ -13,7 +13,6 @@ private const val UNSET_FLOATING_BAR_POSITION = Int.MIN_VALUE
 private const val PROJECT_DIR_MACRO = "\$PROJECT_DIR$"
 
 data class SavedPoint(
-    var anchorStorageVersion: Int = 0,
     var line: Int = 0,
     var column: Int = 0,
     var dx: Int = 0,
@@ -21,9 +20,7 @@ data class SavedPoint(
     var offset: Int = 0,
     var outsideCode: Boolean = false,
     var afterLineEndPx: Int = 0,
-    var foldHiddenHeightAbove: Int = UNSET_FOLD_HIDDEN_HEIGHT_ABOVE,
-    // Legacy field kept only so older XML can still deserialize.
-    var x: Int = 0
+    var foldHiddenHeightAbove: Int = UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
 )
 
 data class SavedStroke(
@@ -33,13 +30,7 @@ data class SavedStroke(
     var filled: Boolean = false,
     var kind: String? = null,
     var objectGroupId: Long = 0L,
-    var rigidObjectAnchor: Boolean = false,
-    var annotationText: String? = null,
-    var annotationTextStyle: String? = null,
-    var annotationBoundsX: Int = 0,
-    var annotationBoundsY: Int = 0,
-    var annotationBoundsWidth: Int = 0,
-    var annotationBoundsHeight: Int = 0
+    var rigidObjectAnchor: Boolean = false
 )
 
 data class SavedRasterFill(
@@ -391,13 +382,7 @@ class DrawingStateService(
         filled = filled,
         kind = kind,
         objectGroupId = objectGroupId,
-        rigidObjectAnchor = rigidObjectAnchor,
-        annotationText = annotationText,
-        annotationTextStyle = annotationTextStyle,
-        annotationBoundsX = annotationBoundsX,
-        annotationBoundsY = annotationBoundsY,
-        annotationBoundsWidth = annotationBoundsWidth,
-        annotationBoundsHeight = annotationBoundsHeight
+        rigidObjectAnchor = rigidObjectAnchor
     )
 
     private fun SavedRasterFill.deepCopy(): SavedRasterFill = SavedRasterFill(

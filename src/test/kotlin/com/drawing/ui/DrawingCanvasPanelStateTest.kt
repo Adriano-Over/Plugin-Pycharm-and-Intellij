@@ -9,7 +9,9 @@ import com.drawing.ShapeKind
 import com.intellij.openapi.project.Project
 import java.awt.Color
 import java.awt.Cursor
+import java.awt.Point
 import java.awt.Rectangle
+import java.awt.event.ActionEvent
 import java.awt.event.FocusEvent
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -195,7 +197,7 @@ class DrawingCanvasPanelStateTest {
     }
 
     @Test
-    fun `balloon text editor cancels instead of committing on focus loss`() {
+    fun `text editor commits typed text on outside click`() {
         val fixture = panelFixture()
         val commits = mutableListOf<String?>()
         val openTextEditor = fixture.panel.javaClass.declaredMethods.firstOrNull { method ->
@@ -212,12 +214,102 @@ class DrawingCanvasPanelStateTest {
         )
 
         val editor = fixture.panel.components.filterIsInstance<JTextArea>().single()
+        editor.text = "Posted from click"
+
+        val finishOutsideClick = fixture.panel.javaClass.declaredMethods.firstOrNull { method ->
+            method.name == "finishActiveTextEditorFromOutsideClick"
+        } ?: error("finishActiveTextEditorFromOutsideClick not found")
+        finishOutsideClick.isAccessible = true
+
+        val handled = finishOutsideClick.invoke(fixture.panel, Point(200, 200))
+
+        assertEquals(true, handled)
+        assertEquals(listOf("Posted from click"), commits, "Clicking outside should commit typed text")
+        assertNull(fixture.panel.components.filterIsInstance<JTextArea>().firstOrNull(), "Editor should be removed after commit")
+    }
+
+    @Test
+    fun `text editor commits typed text on focus loss and cancels blank text`() {
+        val fixture = panelFixture()
+        val commits = mutableListOf<String?>()
+        val openTextEditor = fixture.panel.javaClass.declaredMethods.firstOrNull { method ->
+            method.name == "openTextEditor" &&
+                method.parameterTypes.size == 2 &&
+                method.parameterTypes[0] == Rectangle::class.java
+        } ?: error("openTextEditor not found")
+        openTextEditor.isAccessible = true
+
+        openTextEditor.invoke(
+            fixture.panel,
+            Rectangle(20, 20, 120, 60),
+            { text: String? -> commits += text } as (String?) -> Unit
+        )
+
+        val editor = fixture.panel.components.filterIsInstance<JTextArea>().single()
+        editor.text = "Posted from focus"
         editor.focusListeners.forEach { listener ->
             listener.focusLost(FocusEvent(editor, FocusEvent.FOCUS_LOST))
         }
 
-        assertEquals(listOf(null), commits, "Losing focus should cancel, not commit, the current text")
-        assertNull(fixture.panel.components.filterIsInstance<JTextArea>().firstOrNull(), "Editor should be removed after cancel")
+        openTextEditor.invoke(
+            fixture.panel,
+            Rectangle(20, 20, 120, 60),
+            { text: String? -> commits += text } as (String?) -> Unit
+        )
+        val blankEditor = fixture.panel.components.filterIsInstance<JTextArea>().single()
+        blankEditor.text = "   "
+        blankEditor.focusListeners.forEach { listener ->
+            listener.focusLost(FocusEvent(blankEditor, FocusEvent.FOCUS_LOST))
+        }
+
+        assertEquals(
+            listOf("Posted from focus", null),
+            commits,
+            "Focus loss should commit typed text but keep blank text as cancel"
+        )
+        assertNull(fixture.panel.components.filterIsInstance<JTextArea>().firstOrNull(), "Editor should be removed after finish")
+    }
+
+    @Test
+    fun `text editor keyboard actions commit cancel and insert multiline text`() {
+        val fixture = panelFixture()
+        val commits = mutableListOf<String?>()
+        val openTextEditor = fixture.panel.javaClass.declaredMethods.firstOrNull { method ->
+            method.name == "openTextEditor" &&
+                method.parameterTypes.size == 2 &&
+                method.parameterTypes[0] == Rectangle::class.java
+        } ?: error("openTextEditor not found")
+        openTextEditor.isAccessible = true
+
+        openTextEditor.invoke(
+            fixture.panel,
+            Rectangle(20, 20, 120, 60),
+            { text: String? -> commits += text } as (String?) -> Unit
+        )
+        val multilineEditor = fixture.panel.components.filterIsInstance<JTextArea>().single()
+        multilineEditor.text = "Line one"
+        multilineEditor.caretPosition = multilineEditor.text.length
+        multilineEditor.actionMap.get("newLineBalloonText").actionPerformed(
+            ActionEvent(multilineEditor, ActionEvent.ACTION_PERFORMED, "newLineBalloonText")
+        )
+        multilineEditor.text += "Line two"
+        multilineEditor.actionMap.get("commitBalloonText").actionPerformed(
+            ActionEvent(multilineEditor, ActionEvent.ACTION_PERFORMED, "commitBalloonText")
+        )
+
+        openTextEditor.invoke(
+            fixture.panel,
+            Rectangle(20, 20, 120, 60),
+            { text: String? -> commits += text } as (String?) -> Unit
+        )
+        val cancelEditor = fixture.panel.components.filterIsInstance<JTextArea>().single()
+        cancelEditor.text = "Should not post"
+        cancelEditor.actionMap.get("cancelBalloonText").actionPerformed(
+            ActionEvent(cancelEditor, ActionEvent.ACTION_PERFORMED, "cancelBalloonText")
+        )
+
+        assertEquals(listOf("Line one\nLine two", null), commits)
+        assertNull(fixture.panel.components.filterIsInstance<JTextArea>().firstOrNull(), "Editor should be removed after keyboard action")
     }
 
     private fun panelFixture(): PanelFixture {

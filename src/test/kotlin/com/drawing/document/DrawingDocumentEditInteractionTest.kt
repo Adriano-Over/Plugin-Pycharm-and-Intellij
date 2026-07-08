@@ -17,8 +17,6 @@ import com.drawing.DrawingStrokeWorkspace
 import com.drawing.DrawingStateService
 import com.drawing.CollapsedFoldRegionSnapshot
 import com.drawing.RasterFillPath
-import com.drawing.SavedPoint
-import com.drawing.SavedStroke
 import com.drawing.ShapeKind
 import com.drawing.ShapeStrokeFactory
 import com.drawing.StrokePath
@@ -677,7 +675,7 @@ class DrawingDocumentEditInteractionTest {
     }
 
     @Test
-    fun `semantic text follows code through document sync line insertion`() {
+    fun `annotation follows code through document sync line insertion`() {
         val document = EditableTestDocument(
             """
             before()
@@ -693,51 +691,32 @@ class DrawingDocumentEditInteractionTest {
             minCodeClearancePx = 8
         )
         val store = DrawingStrokeStore(DrawingStateService(testProject("C:/work/drawing-project")))
-        val renderer = DrawingStrokeRenderer(canvasPadding = 10, gridExtendLeftPx = 8)
-        val workspace = DrawingStrokeWorkspace(
-            currentDocument = { document.document },
-            strokeStore = store,
-            coordinateMapper = mapper,
-            strokeRenderer = renderer
+        val annotation = AnnotationPath(
+            id = 909L,
+            text = "Semantic label",
+            color = Color.MAGENTA,
+            anchor = document.anchorAtLineEnd(line = 1, dx = 96, dy = 4),
+            width = 128,
+            height = 42,
+            kind = AnnotationKind.TEXT,
+            objectGroupId = 909L
         )
-        val objectGroupId = 909L
-        val textBox = Rectangle(96, 24, 128, 42)
-        val first = groupedRigidStroke(document, line = 1, dx = 96, dy = 4, kind = ShapeKind.TEXT, objectGroupId = objectGroupId)
-        val second = groupedRigidStroke(document, line = 1, dx = 154, dy = 22, kind = ShapeKind.TEXT, objectGroupId = objectGroupId)
-        listOf(first, second).forEach { stroke ->
-            stroke.annotationText = "Semantic label"
-            stroke.annotationBounds = Rectangle(textBox)
-        }
-        store.setStrokes(document.document, mutableListOf(first, second))
-        val beforeTop = listOf(first, second)
-            .mapNotNull { workspace.buildStrokeGeometryContent(it)?.bounds }
-            .minOf { it.y }
-        val sync = DrawingDocumentSync(
-            coordinateMapper = mapper,
-            strokeStore = store,
-            persistenceDebounceMs = 60_000,
-            currentEditor = { editor.editor },
-            currentFilePath = { "C:/work/drawing-project/src/Main.py" },
-            currentStrokes = { store.currentStrokes(document.document) },
-            onDocumentStrokesRemapped = { changedDocument ->
-                workspace.rebuildStrokeBounds(changedDocument)
-                workspace.resetStrokeGeometryCache(changedDocument)
-            },
-            repaintCanvas = {}
-        )
+        store.setAnnotations(document.document, mutableListOf(annotation))
+        val beforePoint = mapper.toContentPoint(annotation.anchor.copy())!!
+        val sync = documentSync(document, editor, mapper, store)
 
         sync.bindDocumentListener(document.document)
         document.insert(document.lineStartOffset(1), "inserted()\n")
         sync.cancelPendingPersistence()
         sync.unbindDocumentListener()
 
-        val afterTop = listOf(first, second)
-            .mapNotNull { workspace.buildStrokeGeometryContent(it)?.bounds }
-            .minOf { it.y }
-        assertEquals(setOf(2), (first.points + second.points).map { it.line }.toSet())
-        assertEquals(beforeTop + editor.lineHeight, afterTop)
-        assertEquals(textBox.width, first.annotationBounds?.width)
-        assertEquals(textBox.height, first.annotationBounds?.height)
+        val afterPoint = mapper.toContentPoint(annotation.anchor.copy())!!
+        assertEquals(2, annotation.anchor.line)
+        assertEquals(document.lineEndOffset(2), annotation.anchor.offset)
+        assertEquals(beforePoint.x, afterPoint.x)
+        assertEquals(beforePoint.y + editor.lineHeight, afterPoint.y)
+        assertEquals(128, annotation.width)
+        assertEquals(42, annotation.height)
     }
 
     @Test
@@ -1068,108 +1047,6 @@ class DrawingDocumentEditInteractionTest {
         assertEquals(listOf(originalOffset, originalOffset), stroke.points.map { it.offset })
         assertEquals(listOf(1, 1), stroke.points.map { it.line })
         assertEquals(listOf(4, 38), stroke.points.map { it.dy })
-    }
-
-    @Test
-    fun `document sync migrates legacy saved compact freehand drawing on load`() {
-        val filePath = "C:/work/drawing-project/src/Main.py"
-        val document = EditableTestDocument(
-            """
-            before()
-            target()
-            middle()
-            after()
-            """.trimIndent()
-        )
-        val canvas = JPanel()
-        val editor = TestEditor(document, canvas)
-        val mapper = DrawingCoordinateMapper(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            minCodeClearancePx = 8
-        )
-        val service = DrawingStateService(testProject("C:/work/drawing-project"))
-        service.setStrokes(
-            filePath,
-            listOf(
-                SavedStroke(
-                    color = Color.MAGENTA.rgb,
-                    width = 3.5f,
-                    points = mutableListOf(
-                        savedAnchor(document, line = 1, dx = 24, dy = 4),
-                        savedAnchor(document, line = 2, dx = 68, dy = 18)
-                    )
-                )
-            )
-        )
-        val store = DrawingStrokeStore(service)
-        val sync = DrawingDocumentSync(
-            coordinateMapper = mapper,
-            strokeStore = store,
-            persistenceDebounceMs = 60_000,
-            currentEditor = { editor.editor },
-            currentFilePath = { filePath },
-            currentStrokes = { store.currentStrokes(document.document) },
-            onDocumentStrokesRemapped = {},
-            repaintCanvas = {}
-        )
-
-        sync.loadPersistedStrokes()
-        sync.cancelPendingPersistence()
-
-        val loaded = store.currentStrokes(document.document).single()
-        assertEquals(true, loaded.rigidObjectAnchor)
-        assertEquals(setOf(1), loaded.points.map { it.line }.toSet())
-        assertEquals(setOf(document.lineEndOffset(1)), loaded.points.map { it.offset }.toSet())
-    }
-
-    @Test
-    fun `document sync migrates legacy compact freehand drawing before remapping code edit`() {
-        val document = EditableTestDocument(
-            """
-            before()
-            target()
-            middle()
-            after()
-            """.trimIndent()
-        )
-        val canvas = JPanel()
-        val editor = TestEditor(document, canvas)
-        val mapper = DrawingCoordinateMapper(
-            canvas = canvas,
-            editorProvider = { editor.editor },
-            minCodeClearancePx = 8
-        )
-        val service = DrawingStateService(testProject("C:/work/drawing-project"))
-        val store = DrawingStrokeStore(service)
-        val stroke = StrokePath(
-            color = Color.MAGENTA,
-            width = 3.5f,
-            points = mutableListOf(
-                document.anchorAtLineEnd(line = 1, dx = 24, dy = 4),
-                document.anchorAtLineEnd(line = 2, dx = 68, dy = 18)
-            )
-        )
-        store.setStrokes(document.document, mutableListOf(stroke))
-        val sync = DrawingDocumentSync(
-            coordinateMapper = mapper,
-            strokeStore = store,
-            persistenceDebounceMs = 60_000,
-            currentEditor = { editor.editor },
-            currentFilePath = { "C:/work/drawing-project/src/Main.py" },
-            currentStrokes = { store.currentStrokes(document.document) },
-            onDocumentStrokesRemapped = {},
-            repaintCanvas = {}
-        )
-
-        sync.bindDocumentListener(document.document)
-        document.insert(document.lineStartOffset(2), "inserted()\n")
-        sync.cancelPendingPersistence()
-        sync.unbindDocumentListener()
-
-        assertEquals(true, stroke.rigidObjectAnchor)
-        assertEquals(setOf(1), stroke.points.map { it.line }.toSet())
-        assertEquals(setOf(document.lineEndOffset(1)), stroke.points.map { it.offset }.toSet())
     }
 
     @Test
@@ -1687,6 +1564,16 @@ class DrawingDocumentEditInteractionTest {
         currentStrokes += stroke
         val fill = rasterFill(document, line = 0, dx = 130, dy = 12, width = 70, height = 36)
         strokeStore.setRasterFills(document.document, mutableListOf(fill))
+        val annotation = AnnotationPath(
+            id = 808L,
+            text = "Grouped note",
+            color = Color.ORANGE,
+            anchor = document.anchorAtLineEnd(line = 0, dx = 230, dy = 12),
+            width = 86,
+            height = 36,
+            kind = AnnotationKind.TEXT
+        )
+        strokeStore.setAnnotations(document.document, mutableListOf(annotation))
         val sync = documentSync(document, editor, mapper, strokeStore)
         val controller = DrawingCanvasController(
             canvas = canvas,
@@ -1722,6 +1609,7 @@ class DrawingDocumentEditInteractionTest {
         try {
             val strokeBefore = mapper.toViewPoint(stroke.points.first().copy())!!
             val fillBefore = mapper.toViewPoint(fill.anchor.copy())!!
+            val annotationBefore = mapper.toViewPoint(annotation.anchor.copy())!!
 
             controller.handleSelectPressed(Point(0, 0))
             controller.handleSelectDragged(Point(0, 0), Point(fillBefore.x + fill.width / 2, fillBefore.y + fill.height + 20))
@@ -1729,13 +1617,18 @@ class DrawingDocumentEditInteractionTest {
 
             assertEquals(setOf(stroke.id), controller.selectedStrokeIdsSnapshot())
             assertEquals(emptySet<Long>(), controller.selectedRasterFillIdsSnapshot(), "Partially covered fills should not be marquee-selected")
+            assertEquals(emptySet<Long>(), controller.selectedAnnotationIdsSnapshot(), "Annotations outside the marquee should not be selected")
 
             controller.handleSelectPressed(Point(0, 0))
-            controller.handleSelectDragged(Point(0, 0), Point(fillBefore.x + fill.width + 20, fillBefore.y + fill.height + 20))
+            controller.handleSelectDragged(
+                Point(0, 0),
+                Point(annotationBefore.x + annotation.width + 20, annotationBefore.y + annotation.height + 20)
+            )
             controller.handleSelectReleased()
 
             assertEquals(setOf(stroke.id), controller.selectedStrokeIdsSnapshot())
             assertEquals(setOf(fill.id), controller.selectedRasterFillIdsSnapshot())
+            assertEquals(setOf(annotation.id), controller.selectedAnnotationIdsSnapshot())
 
             val dragHandle = Point(fillBefore.x + fill.width / 2, fillBefore.y + fill.height / 2)
             controller.handleSelectPressed(dragHandle)
@@ -1744,10 +1637,13 @@ class DrawingDocumentEditInteractionTest {
 
             val strokeAfter = mapper.toViewPoint(stroke.points.first().copy())!!
             val fillAfter = mapper.toViewPoint(fill.anchor.copy())!!
+            val annotationAfter = mapper.toViewPoint(annotation.anchor.copy())!!
             assertEquals(strokeBefore.x + 24, strokeAfter.x)
             assertEquals(strokeBefore.y + editor.lineHeight, strokeAfter.y)
             assertEquals(fillBefore.x + 24, fillAfter.x)
             assertEquals(fillBefore.y + editor.lineHeight, fillAfter.y)
+            assertEquals(annotationBefore.x + 24, annotationAfter.x)
+            assertEquals(annotationBefore.y + editor.lineHeight, annotationAfter.y)
         } finally {
             sync.cancelPendingPersistence()
         }
@@ -1973,6 +1869,57 @@ class DrawingDocumentEditInteractionTest {
     }
 
     @Test
+    fun `document sync batches rapid edits into one anchor remap flush`() {
+        val document = EditableTestDocument(
+            """
+            before()
+            target()
+            after()
+            """.trimIndent()
+        )
+        val store = DrawingStrokeStore(
+            DrawingStateService(testProject("C:/work/drawing-project"))
+        )
+        val anchor = document.anchorAtLineEnd(line = 1, dx = 22, dy = 6)
+        store.setStrokes(document.document, mutableListOf(strokeWith(anchor)))
+
+        var remapCallbacks = 0
+        var repaintCallbacks = 0
+        val sync = DrawingDocumentSync(
+            coordinateMapper = mapper,
+            strokeStore = store,
+            persistenceDebounceMs = 60_000,
+            currentEditor = { null },
+            currentFilePath = { "C:/work/drawing-project/src/Main.kt" },
+            currentStrokes = { store.currentStrokes(document.document) },
+            onDocumentStrokesRemapped = { changedDocument ->
+                assertSame(document.document, changedDocument)
+                remapCallbacks += 1
+            },
+            repaintCanvas = {
+                repaintCallbacks += 1
+            },
+            documentChangeUiDebounceMs = 60_000
+        )
+
+        sync.bindDocumentListener(document.document)
+        document.insert(document.lineStartOffset(1), "first()\n")
+        document.insert(document.lineStartOffset(2), "second()\n")
+
+        assertEquals(1, anchor.line, "Debounced edits should not remap anchors synchronously during typing")
+        assertEquals(0, remapCallbacks)
+        assertEquals(0, repaintCallbacks)
+
+        sync.unbindDocumentListener()
+        sync.cancelPendingPersistence()
+
+        assertEquals(3, anchor.line)
+        assertEquals(document.lineEndOffset(3), anchor.offset)
+        assertEquals(1, remapCallbacks, "Queued edits should be applied in one flush")
+        assertEquals(1, repaintCallbacks, "Queued edits should repaint once after the flush")
+    }
+
+    @Test
     fun `document sync remaps existing drawing and requests bounds rebuild and repaint after code edit`() {
         val document = EditableTestDocument(
             """
@@ -2024,17 +1971,6 @@ class DrawingDocumentEditInteractionTest {
         )
     }
 
-    private fun savedAnchor(document: EditableTestDocument, line: Int, dx: Int, dy: Int): SavedPoint {
-        return SavedPoint(
-            anchorStorageVersion = 3,
-            line = line,
-            column = document.lineEndColumn(line),
-            dx = dx,
-            dy = dy,
-            offset = document.lineEndOffset(line)
-        )
-    }
-
     private fun groupedRigidStroke(
         document: EditableTestDocument,
         line: Int,
@@ -2054,31 +1990,6 @@ class DrawingDocumentEditInteractionTest {
                 AnchorPoint(line = line, column = column, dx = dx + 32, dy = dy + 18, offset = lineEnd)
             ),
             filled = filled,
-            kind = kind,
-            objectGroupId = objectGroupId,
-            rigidObjectAnchor = true
-        )
-    }
-
-    private fun groupedRigidLineStroke(
-        document: EditableTestDocument,
-        line: Int,
-        startDx: Int,
-        startDy: Int,
-        endDx: Int,
-        endDy: Int,
-        kind: ShapeKind? = null,
-        objectGroupId: Long
-    ): StrokePath {
-        val lineEnd = document.lineEndOffset(line)
-        val column = document.lineEndColumn(line)
-        return StrokePath(
-            color = Color.MAGENTA,
-            width = 3.5f,
-            points = mutableListOf(
-                AnchorPoint(line = line, column = column, dx = startDx, dy = startDy, offset = lineEnd),
-                AnchorPoint(line = line, column = column, dx = endDx, dy = endDy, offset = lineEnd)
-            ),
             kind = kind,
             objectGroupId = objectGroupId,
             rigidObjectAnchor = true

@@ -16,41 +16,23 @@ class DrawingDocumentSync(
     private val currentRasterFills: () -> List<RasterFillPath> = { emptyList() },
     private val currentAnnotations: () -> List<AnnotationPath> = { emptyList() },
     private val onDocumentStrokesRemapped: (Document) -> Unit,
-    private val repaintCanvas: () -> Unit
+    private val repaintCanvas: () -> Unit,
+    private val documentChangeUiDebounceMs: Int = 0
 ) {
     private var boundDocument: Document? = null
     private var documentListener: DocumentListener? = null
     private var persistenceTimer: Timer? = null
+    private var documentChangeUiTimer: Timer? = null
+    private var pendingUiDocument: Document? = null
+    private val pendingDocumentEdits = mutableListOf<DocumentAnchorEdit>()
 
     fun bindDocumentListener(document: Document) {
         unbindDocumentListener()
 
         val listener = object : DocumentListener {
-            override fun beforeDocumentChange(event: DocumentEvent) {
-                migrateFreehandStrokes(strokeStore.currentStrokes(document))
-            }
-
             override fun documentChanged(event: DocumentEvent) {
-                val strokes = strokeStore.currentStrokes(document)
-                coordinateMapper.remapAnchorsForDocumentChange(
-                    document = document,
-                    event = event,
-                    strokes = strokes
-                )
-                for (fill in strokeStore.currentRasterFills(document)) {
-                    coordinateMapper.remapAnchorForDocumentChange(document, event, fill.anchor)
-                }
-                for (annotation in strokeStore.currentAnnotations(document)) {
-                    coordinateMapper.remapAnchorForDocumentChange(document, event, annotation.anchor)
-                }
-                val fills = strokeStore.currentRasterFills(document)
-                val annotations = strokeStore.currentAnnotations(document)
-                shiftRigidStrokesOutOfCodeText(strokes)
-                shiftRasterFillsOutOfCodeText(fills)
-                shiftAnnotationsOutOfCodeText(annotations)
-                onDocumentStrokesRemapped(document)
-                schedulePersistCurrentStrokes()
-                repaintCanvas()
+                pendingDocumentEdits += DocumentAnchorEdit.from(event)
+                scheduleDocumentChangeFlush(document)
             }
         }
 
@@ -60,6 +42,8 @@ class DrawingDocumentSync(
     }
 
     fun unbindDocumentListener() {
+        documentChangeUiTimer?.stop()
+        flushPendingDocumentChanges()
         val document = boundDocument
         val listener = documentListener
         if (document != null && listener != null) {
@@ -80,14 +64,15 @@ class DrawingDocumentSync(
         val loaded = strokeStore.loadPersistedStrokes(filePath, document) { doc, anchor ->
             coordinateMapper.normalizeAnchor(doc, anchor)
         }
-        val migrated = migrateFreehandStrokes(loaded)
-        val shifted = shiftRigidStrokesOutOfCodeText(loaded)
-        val shiftedRasterFills = shiftRasterFillsOutOfCodeText(strokeStore.currentRasterFills(document))
-        val shiftedAnnotations = shiftAnnotationsOutOfCodeText(strokeStore.currentAnnotations(document))
-        if (migrated || shifted || shiftedRasterFills || shiftedAnnotations) {
+        val lineClearanceCache = mutableMapOf<Int, Int?>()
+        val shifted = shiftRigidStrokesOutOfCodeText(loaded, lineClearanceCache)
+        val shiftedRasterFills = shiftRasterFillsOutOfCodeText(strokeStore.currentRasterFills(document), lineClearanceCache)
+        val shiftedAnnotations = shiftAnnotationsOutOfCodeText(strokeStore.currentAnnotations(document), lineClearanceCache)
+        if (shifted || shiftedRasterFills || shiftedAnnotations) {
             schedulePersistCurrentStrokes()
         }
         onDocumentStrokesRemapped(document)
+        repaintCanvas()
     }
 
     fun schedulePersistCurrentStrokes() {
@@ -109,24 +94,58 @@ class DrawingDocumentSync(
         strokeStore.persistDrawing(currentFilePath(), currentStrokes(), currentRasterFills(), currentAnnotations())
     }
 
-    private fun migrateFreehandStrokes(strokes: List<StrokePath>): Boolean {
-        var migrated = false
-        for (stroke in strokes) {
-            if (!DrawingViewportTools.shouldUseRigidObjectAnchorForFreehand(stroke, coordinateMapper::toViewPoint)) {
-                continue
-            }
-            if (coordinateMapper.reanchorStrokeToObjectAnchor(stroke)) {
-                migrated = true
-            }
+    private fun scheduleDocumentChangeFlush(document: Document) {
+        pendingUiDocument = document
+        if (documentChangeUiDebounceMs <= 0) {
+            flushPendingDocumentChanges()
+            return
         }
-        return migrated
+
+        val timer = documentChangeUiTimer ?: Timer(documentChangeUiDebounceMs) {
+            flushPendingDocumentChanges()
+        }.also {
+            it.isRepeats = false
+            documentChangeUiTimer = it
+        }
+
+        timer.restart()
     }
 
-    private fun shiftRigidStrokesOutOfCodeText(strokes: List<StrokePath>): Boolean {
+    private fun flushPendingDocumentChanges() {
+        val document = pendingUiDocument ?: return
+        val edits = pendingDocumentEdits.toList()
+        pendingDocumentEdits.clear()
+        pendingUiDocument = null
+        if (edits.isEmpty()) return
+
+        val strokes = strokeStore.currentStrokes(document)
+        val fills = strokeStore.currentRasterFills(document)
+        val annotations = strokeStore.currentAnnotations(document)
+        coordinateMapper.remapDrawingAnchorsForDocumentChanges(
+            document = document,
+            edits = edits,
+            strokes = strokes,
+            fills = fills,
+            annotations = annotations
+        )
+
+        val lineClearanceCache = mutableMapOf<Int, Int?>()
+        shiftRigidStrokesOutOfCodeText(strokes, lineClearanceCache)
+        shiftRasterFillsOutOfCodeText(fills, lineClearanceCache)
+        shiftAnnotationsOutOfCodeText(annotations, lineClearanceCache)
+        onDocumentStrokesRemapped(document)
+        repaintCanvas()
+        schedulePersistCurrentStrokes()
+    }
+
+    private fun shiftRigidStrokesOutOfCodeText(
+        strokes: List<StrokePath>,
+        lineClearanceCache: MutableMap<Int, Int?>
+    ): Boolean {
         var shifted = false
         for (group in strokes.groupBy(::objectGroupKey).values) {
             val shiftX = group.maxOfOrNull { stroke ->
-                coordinateMapper.requiredShiftOutOfCodeText(stroke)
+                coordinateMapper.requiredShiftOutOfCodeText(stroke, lineClearanceCache)
             } ?: 0
             if (shiftX <= 0) continue
 
@@ -138,11 +157,14 @@ class DrawingDocumentSync(
         return shifted
     }
 
-    private fun shiftRasterFillsOutOfCodeText(fills: List<RasterFillPath>): Boolean {
+    private fun shiftRasterFillsOutOfCodeText(
+        fills: List<RasterFillPath>,
+        lineClearanceCache: MutableMap<Int, Int?>
+    ): Boolean {
         var shifted = false
         for (group in fills.groupBy(::rasterFillGroupKey).values) {
             val shiftX = group.maxOfOrNull { fill ->
-                coordinateMapper.requiredShiftOutOfCodeText(fill)
+                coordinateMapper.requiredShiftOutOfCodeText(fill, lineClearanceCache)
             } ?: 0
             if (shiftX <= 0) continue
 
@@ -154,11 +176,14 @@ class DrawingDocumentSync(
         return shifted
     }
 
-    private fun shiftAnnotationsOutOfCodeText(annotations: List<AnnotationPath>): Boolean {
+    private fun shiftAnnotationsOutOfCodeText(
+        annotations: List<AnnotationPath>,
+        lineClearanceCache: MutableMap<Int, Int?>
+    ): Boolean {
         var shifted = false
         for (group in annotations.groupBy(::annotationGroupKey).values) {
             val shiftX = group.maxOfOrNull { annotation ->
-                coordinateMapper.requiredShiftOutOfCodeText(annotation)
+                coordinateMapper.requiredShiftOutOfCodeText(annotation, lineClearanceCache)
             } ?: 0
             if (shiftX <= 0) continue
 

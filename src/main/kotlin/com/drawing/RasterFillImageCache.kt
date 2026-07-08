@@ -20,7 +20,11 @@ internal class RasterFillImageCache {
             return image
         }
         DrawingPerformanceDiagnostics.recordRasterFillImageCacheMiss()
-        return RasterFillCodec.decodePngBase64(fill.pngBase64).also { image ->
+        return RasterFillCodec.decodePngBase64(
+            pngBase64 = fill.pngBase64,
+            expectedWidth = fill.width,
+            expectedHeight = fill.height
+        ).also { image ->
             decodedByKey[key] = image
         }
     }

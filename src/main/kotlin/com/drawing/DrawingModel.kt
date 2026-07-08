@@ -1,7 +1,6 @@
 package com.drawing
 
 import java.awt.Color
-import java.awt.Rectangle
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -52,9 +51,6 @@ data class StrokePath(
     val kind: ShapeKind? = null,
     var objectGroupId: Long = 0L,
     var rigidObjectAnchor: Boolean = false,
-    var annotationText: String? = null,
-    var annotationTextStyle: BalloonTextStyle? = null,
-    var annotationBounds: Rectangle? = null,
     /**
      * Runtime-only baseline used to keep a whole stroke visually stable when unrelated
      * folded code above it expands/collapses. This avoids correcting each point by a
@@ -72,9 +68,6 @@ data class StrokePath(
         kind = kind,
         objectGroupId = objectGroupId,
         rigidObjectAnchor = rigidObjectAnchor,
-        annotationText = annotationText,
-        annotationTextStyle = annotationTextStyle,
-        annotationBounds = annotationBounds?.let { Rectangle(it) },
         foldLayoutAnchorLine = foldLayoutAnchorLine,
         foldLayoutAnchorBaseY = foldLayoutAnchorBaseY
     )

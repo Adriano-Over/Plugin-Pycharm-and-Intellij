@@ -205,7 +205,6 @@ class DrawingStateServiceTest {
             width = 5.5f,
             points = mutableListOf(
                 SavedPoint(
-                    anchorStorageVersion = 3,
                     line = line,
                     column = 7,
                     dx = 11,

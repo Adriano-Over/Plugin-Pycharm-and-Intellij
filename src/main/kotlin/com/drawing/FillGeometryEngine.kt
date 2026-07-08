@@ -280,14 +280,17 @@ internal object FillGeometryEngine {
 
             for (fill in rasterFills) {
                 val topLeft = toViewPoint(fill.anchor.copy()) ?: continue
-                val image = runCatching { RasterFillCodec.decodePngBase64(fill.pngBase64) }.getOrNull() ?: continue
+                val image = runCatching {
+                    RasterFillCodec.decodePngBase64(
+                        pngBase64 = fill.pngBase64,
+                        expectedWidth = fill.width,
+                        expectedHeight = fill.height
+                    )
+                }.getOrNull() ?: continue
                 g.drawImage(image, topLeft.x - offsetX, topLeft.y - offsetY, null)
             }
 
             for (stroke in strokes) {
-                if (stroke.annotationText != null) {
-                    continue
-                }
                 val points = stroke.points.mapNotNull(toViewPoint)
                 if (points.isEmpty()) continue
 

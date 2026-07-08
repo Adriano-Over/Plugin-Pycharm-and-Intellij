@@ -8,16 +8,15 @@ import com.drawing.DrawingStrokeStore
 import com.drawing.DrawingStateService
 import com.drawing.RasterFillCodec
 import com.drawing.RasterFillPath
+import com.drawing.SavedFileDrawing
 import com.drawing.SavedPoint
-import com.drawing.SavedStroke
+import com.drawing.SavedRasterFill
 import com.drawing.ShapeKind
 import com.drawing.StrokePath
-import com.drawing.UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 import java.awt.Color
-import java.awt.Rectangle
 import java.awt.image.BufferedImage
 
 class DrawingStrokeStoreTest {
@@ -59,7 +58,6 @@ class DrawingStrokeStoreTest {
         assertEquals(ShapeKind.RECTANGLE.name, saved.kind)
         assertEquals(99L, saved.objectGroupId)
         assertEquals(true, saved.rigidObjectAnchor)
-        assertEquals(3, saved.points.single().anchorStorageVersion)
         assertEquals(15, saved.points.single().foldHiddenHeightAbove)
 
         var normalizedAnchors = 0
@@ -85,78 +83,6 @@ class DrawingStrokeStoreTest {
         assertEquals(13, loaded.single().points.single().afterLineEndPx)
         assertEquals(15, loaded.single().points.single().foldHiddenHeightAbove)
         assertEquals(loaded, store.currentStrokes(document))
-    }
-
-    @Test
-    fun `loadPersistedStrokes maps legacy x anchors for older saved drawings`() {
-        val service = DrawingStateService(testProject(projectBasePath))
-        val store = DrawingStrokeStore(service)
-        val document = testDocument()
-        service.setStrokes(
-            filePath,
-            listOf(
-                SavedStroke(
-                    color = Color.YELLOW.rgb,
-                    width = 3.5f,
-                    points = mutableListOf(
-                        SavedPoint(
-                            anchorStorageVersion = 0,
-                            line = 8,
-                            dy = 21,
-                            x = 34
-                        )
-                    )
-                )
-            )
-        )
-
-        val loadedPoint = store.loadPersistedStrokes(filePath, document) { _, _ -> }
-            .single()
-            .points
-            .single()
-
-        assertEquals(8, loadedPoint.line)
-        assertEquals(0, loadedPoint.column)
-        assertEquals(34, loadedPoint.dx)
-        assertEquals(21, loadedPoint.dy)
-        assertEquals(0, loadedPoint.offset)
-        assertEquals(false, loadedPoint.outsideCode)
-        assertEquals(0, loadedPoint.afterLineEndPx)
-        assertEquals(UNSET_FOLD_HIDDEN_HEIGHT_ABOVE, loadedPoint.foldHiddenHeightAbove)
-    }
-
-    @Test
-    fun `text annotation metadata round trips through persistence`() {
-        val service = DrawingStateService(testProject(projectBasePath))
-        val store = DrawingStrokeStore(service)
-        val document = testDocument()
-        val stroke = StrokePath(
-            color = Color.CYAN,
-            width = 3.5f,
-            points = mutableListOf(
-                AnchorPoint(line = 2, column = 5, dx = 11, dy = 13, offset = 17)
-            ),
-            kind = ShapeKind.TEXT,
-            objectGroupId = 77L,
-            annotationText = "Hello, Drawing",
-            annotationTextStyle = BalloonTextStyle.OUTLINE,
-            annotationBounds = Rectangle(40, 50, 180, 60)
-        )
-
-        store.persistStrokes(filePath, listOf(stroke))
-
-        val saved = service.getStrokes(filePath).single()
-        assertEquals("Hello, Drawing", saved.annotationText)
-        assertEquals(BalloonTextStyle.OUTLINE.name, saved.annotationTextStyle)
-        assertEquals(40, saved.annotationBoundsX)
-        assertEquals(50, saved.annotationBoundsY)
-        assertEquals(180, saved.annotationBoundsWidth)
-        assertEquals(60, saved.annotationBoundsHeight)
-
-        val loaded = store.loadPersistedStrokes(filePath, document) { _, anchor -> anchor }
-        assertEquals("Hello, Drawing", loaded.single().annotationText)
-        assertEquals(BalloonTextStyle.OUTLINE, loaded.single().annotationTextStyle)
-        assertEquals(Rectangle(40, 50, 180, 60), loaded.single().annotationBounds)
     }
 
     @Test
@@ -194,7 +120,6 @@ class DrawingStrokeStoreTest {
         assertEquals(2, saved.width)
         assertEquals(2, saved.height)
         assertEquals(456L, saved.objectGroupId)
-        assertEquals(3, saved.anchor.anchorStorageVersion)
         assertEquals(60, saved.anchor.foldHiddenHeightAbove)
 
         val loadedStrokes = store.loadPersistedStrokes(filePath, document) { _, anchor ->
@@ -216,6 +141,52 @@ class DrawingStrokeStoreTest {
         assertEquals(50, loadedFill.anchor.afterLineEndPx)
         assertEquals(60, loadedFill.anchor.foldHiddenHeightAbove)
         assertEquals(Color.GREEN.rgb, RasterFillCodec.decodePngBase64(loadedFill.pngBase64).getRGB(0, 0))
+    }
+
+    @Test
+    fun `loadPersistedStrokes skips unsupported raster fill payloads`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val store = DrawingStrokeStore(service)
+        val document = testDocument()
+        val image = BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)
+        val validFill = SavedRasterFill(
+            id = 123L,
+            color = Color.GREEN.rgb,
+            anchor = SavedPoint(line = 1, column = 2, dx = 3, dy = 4, offset = 5),
+            width = 2,
+            height = 2,
+            pngBase64 = RasterFillCodec.encodePngBase64(image)
+        )
+        val oversizedFill = SavedRasterFill(
+            id = 456L,
+            color = Color.RED.rgb,
+            anchor = SavedPoint(line = 1, column = 2, dx = 3, dy = 4, offset = 5),
+            width = 20_000,
+            height = 20_000,
+            pngBase64 = RasterFillCodec.encodePngBase64(image)
+        )
+        val invalidBase64Fill = SavedRasterFill(
+            id = 789L,
+            color = Color.BLUE.rgb,
+            anchor = SavedPoint(line = 1, column = 2, dx = 3, dy = 4, offset = 5),
+            width = 2,
+            height = 2,
+            pngBase64 = "not valid base64"
+        )
+        service.loadState(
+            service.state.copy(
+                files = mutableListOf(
+                    SavedFileDrawing(
+                        filePath = "\$PROJECT_DIR$/src/Main.kt",
+                        rasterFills = mutableListOf(validFill, oversizedFill, invalidBase64Fill)
+                    )
+                )
+            )
+        )
+
+        store.loadPersistedStrokes(filePath, document) { _, _ -> }
+
+        assertEquals(listOf(123L), store.currentRasterFills(document).map { it.id })
     }
 
     @Test
@@ -277,5 +248,70 @@ class DrawingStrokeStoreTest {
         assertEquals(AnnotationKind.BALLOON, loadedAnnotation.kind)
         assertEquals(BalloonTextStyle.OUTLINE, loadedAnnotation.style)
         assertEquals(654L, loadedAnnotation.objectGroupId)
+    }
+
+    @Test
+    fun `mixed strokes raster fills text and balloons round trip together`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val store = DrawingStrokeStore(service)
+        val document = testDocument()
+        val image = BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)
+        image.setRGB(0, 0, Color.GREEN.rgb)
+        val stroke = StrokePath(
+            color = Color.CYAN,
+            width = 4.5f,
+            points = mutableListOf(
+                AnchorPoint(line = 2, column = 10, dx = 24, dy = 4, offset = 80),
+                AnchorPoint(line = 2, column = 10, dx = 84, dy = 34, offset = 80)
+            ),
+            kind = ShapeKind.RECTANGLE,
+            objectGroupId = 700L,
+            rigidObjectAnchor = true
+        )
+        val fill = RasterFillPath(
+            id = 701L,
+            color = Color.GREEN,
+            anchor = AnchorPoint(line = 3, column = 8, dx = 40, dy = 10, offset = 110),
+            width = 2,
+            height = 2,
+            pngBase64 = RasterFillCodec.encodePngBase64(image),
+            objectGroupId = 700L
+        )
+        val text = AnnotationPath(
+            id = 702L,
+            text = "Text note",
+            color = Color.ORANGE,
+            anchor = AnchorPoint(line = 4, column = 5, dx = 50, dy = 12, offset = 140),
+            width = 120,
+            height = 42,
+            kind = AnnotationKind.TEXT,
+            style = BalloonTextStyle.SOLID,
+            objectGroupId = 702L
+        )
+        val balloon = AnnotationPath(
+            id = 703L,
+            text = "Balloon note",
+            color = Color.MAGENTA,
+            anchor = AnchorPoint(line = 5, column = 5, dx = 60, dy = 14, offset = 180),
+            width = 140,
+            height = 64,
+            kind = AnnotationKind.BALLOON,
+            style = BalloonTextStyle.OUTLINE,
+            objectGroupId = 703L
+        )
+
+        store.persistDrawing(filePath, listOf(stroke), listOf(fill), listOf(text, balloon))
+        store.loadPersistedStrokes(filePath, document) { _, _ -> }
+
+        assertEquals(listOf(ShapeKind.RECTANGLE), store.currentStrokes(document).map { it.kind })
+        assertEquals(listOf(701L), store.currentRasterFills(document).map { it.id })
+        assertEquals(
+            listOf(AnnotationKind.TEXT, AnnotationKind.BALLOON),
+            store.currentAnnotations(document).map { it.kind }
+        )
+        assertEquals(
+            listOf("Text note", "Balloon note"),
+            store.currentAnnotations(document).map { it.text }
+        )
     }
 }

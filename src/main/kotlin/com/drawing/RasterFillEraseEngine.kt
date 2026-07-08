@@ -28,7 +28,13 @@ internal object RasterFillEraseEngine {
             val fillBounds = Rectangle(topLeft.x, topLeft.y, fill.width, fill.height)
             if (!fillBounds.intersects(eraserBounds)) continue
 
-            val image = runCatching { RasterFillCodec.decodePngBase64(fill.pngBase64) }.getOrNull() ?: continue
+            val image = runCatching {
+                RasterFillCodec.decodePngBase64(
+                    pngBase64 = fill.pngBase64,
+                    expectedWidth = fill.width,
+                    expectedHeight = fill.height
+                )
+            }.getOrNull() ?: continue
             val result = clearEraserPath(image, localPoints, topLeft, radius)
             if (!result.changed) continue
 

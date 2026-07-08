@@ -267,8 +267,14 @@ class DrawingStrokeWorkspace(
         invalidateFoldMarkerCache()
     }
 
+    fun resetDocumentLayoutCaches(document: Document) {
+        strokeStore.currentStrokeBounds(document).clear()
+        strokeStore.currentStrokeGeometries(document).clear()
+        clearObjectBoundsCaches()
+        invalidateFoldMarkerCache()
+    }
+
     fun buildStrokeGeometryContent(stroke: StrokePath): StrokeGeometryContent? {
-        coordinateMapper.ensureStrokeFoldLayoutBaseline(stroke)
         return strokeRenderer.buildStrokeGeometryContent(
             stroke = stroke,
             toContentPoint = { anchor -> coordinateMapper.toContentPoint(stroke, anchor) }

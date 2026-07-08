@@ -13,6 +13,24 @@ import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
+data class DocumentAnchorEdit(
+    val offset: Int,
+    val oldLength: Int,
+    val newLength: Int,
+    val newFragment: String
+) {
+    companion object {
+        fun from(event: DocumentEvent): DocumentAnchorEdit {
+            return DocumentAnchorEdit(
+                offset = event.offset,
+                oldLength = event.oldLength,
+                newLength = event.newLength,
+                newFragment = event.newFragment.toString()
+            )
+        }
+    }
+}
+
 class DrawingCoordinateMapper(
     private val canvas: JPanel,
     private val editorProvider: () -> Editor?,
@@ -225,7 +243,10 @@ class DrawingCoordinateMapper(
         return true
     }
 
-    fun requiredShiftOutOfCodeText(stroke: StrokePath): Int {
+    fun requiredShiftOutOfCodeText(
+        stroke: StrokePath,
+        lineClearanceCache: MutableMap<Int, Int?>? = null
+    ): Int {
         if (!stroke.usesRigidObjectAnchoring() || stroke.points.size < 2) return 0
         val editor = editorProvider() ?: return 0
         val document = editor.document
@@ -244,16 +265,18 @@ class DrawingCoordinateMapper(
 
         var requiredLeftX = Int.MIN_VALUE
         for (line in topLine..bottomLine) {
-            val lineInfo = resolveLineInfo(editor.logicalPositionToXY(LogicalPosition(line, 0))) ?: continue
-            if (!lineInfo.hasCodeText) continue
-            requiredLeftX = max(requiredLeftX, lineInfo.lineEndX + minCodeClearancePx)
+            val lineRequiredLeftX = requiredLeftXForLine(editor, line, lineClearanceCache) ?: continue
+            requiredLeftX = max(requiredLeftX, lineRequiredLeftX)
         }
         if (requiredLeftX == Int.MIN_VALUE || minX >= requiredLeftX) return 0
 
         return requiredLeftX - minX
     }
 
-    fun requiredShiftOutOfCodeText(fill: RasterFillPath): Int {
+    fun requiredShiftOutOfCodeText(
+        fill: RasterFillPath,
+        lineClearanceCache: MutableMap<Int, Int?>? = null
+    ): Int {
         if (fill.width <= 0 || fill.height <= 0) return 0
         val editor = editorProvider() ?: return 0
         val document = editor.document
@@ -269,16 +292,18 @@ class DrawingCoordinateMapper(
 
         var requiredLeftX = Int.MIN_VALUE
         for (line in topLine..bottomLine) {
-            val lineInfo = resolveLineInfo(editor.logicalPositionToXY(LogicalPosition(line, 0))) ?: continue
-            if (!lineInfo.hasCodeText) continue
-            requiredLeftX = max(requiredLeftX, lineInfo.lineEndX + minCodeClearancePx)
+            val lineRequiredLeftX = requiredLeftXForLine(editor, line, lineClearanceCache) ?: continue
+            requiredLeftX = max(requiredLeftX, lineRequiredLeftX)
         }
         if (requiredLeftX == Int.MIN_VALUE || minX >= requiredLeftX) return 0
 
         return requiredLeftX - minX
     }
 
-    fun requiredShiftOutOfCodeText(annotation: AnnotationPath): Int {
+    fun requiredShiftOutOfCodeText(
+        annotation: AnnotationPath,
+        lineClearanceCache: MutableMap<Int, Int?>? = null
+    ): Int {
         if (annotation.width <= 0 || annotation.height <= 0) return 0
         val editor = editorProvider() ?: return 0
         val document = editor.document
@@ -294,13 +319,31 @@ class DrawingCoordinateMapper(
 
         var requiredLeftX = Int.MIN_VALUE
         for (line in topLine..bottomLine) {
-            val lineInfo = resolveLineInfo(editor.logicalPositionToXY(LogicalPosition(line, 0))) ?: continue
-            if (!lineInfo.hasCodeText) continue
-            requiredLeftX = max(requiredLeftX, lineInfo.lineEndX + minCodeClearancePx)
+            val lineRequiredLeftX = requiredLeftXForLine(editor, line, lineClearanceCache) ?: continue
+            requiredLeftX = max(requiredLeftX, lineRequiredLeftX)
         }
         if (requiredLeftX == Int.MIN_VALUE || minX >= requiredLeftX) return 0
 
         return requiredLeftX - minX
+    }
+
+    private fun requiredLeftXForLine(
+        editor: Editor,
+        line: Int,
+        lineClearanceCache: MutableMap<Int, Int?>?
+    ): Int? {
+        if (lineClearanceCache != null && lineClearanceCache.containsKey(line)) {
+            return lineClearanceCache[line]
+        }
+
+        val lineInfo = resolveLineInfo(editor.logicalPositionToXY(LogicalPosition(line, 0)))
+        val requiredLeftX = if (lineInfo?.hasCodeText == true) {
+            lineInfo.lineEndX + minCodeClearancePx
+        } else {
+            null
+        }
+        lineClearanceCache?.put(line, requiredLeftX)
+        return requiredLeftX
     }
 
     fun shiftStrokeHorizontally(stroke: StrokePath, shiftX: Int) {
@@ -480,10 +523,8 @@ class DrawingCoordinateMapper(
     }
 
     /**
-     * Stroke-aware overload kept for renderer/workspace compatibility.
-     * It intentionally delegates to the normal anchor mapping. A whole-stroke fold
-     * correction was tested, but it cancels IntelliJ's line movement and makes drawings
-     * stop following the code when folds above change.
+     * Stroke-aware mapping intentionally delegates to normal anchor mapping so IntelliJ's
+     * own line movement remains the single source of truth when folds above change.
      */
     fun toContentPoint(stroke: StrokePath, anchor: AnchorPoint): Point? {
         return toContentPoint(anchor)
@@ -513,50 +554,77 @@ class DrawingCoordinateMapper(
         foldLayoutSignature = computeFoldLayoutSignature()
     }
 
-    /**
-     * Compatibility no-op for callers from the previous fold-stability attempt.
-     * Stored anchors remain line/offset based; no screen-freezing baseline is captured.
-     */
-    fun lockStrokeFoldLayout(stroke: StrokePath, anchor: AnchorPoint? = stroke.points.firstOrNull()) {
-        // Intentionally no-op.
+    fun remapAnchorsForDocumentChange(
+        document: Document,
+        event: DocumentEvent,
+        strokes: List<StrokePath>
+    ) {
+        remapDrawingAnchorsForDocumentChanges(
+            document = document,
+            edits = listOf(DocumentAnchorEdit.from(event)),
+            strokes = strokes,
+            fills = emptyList(),
+            annotations = emptyList()
+        )
     }
 
-    /** Compatibility no-op. */
-    fun ensureStrokeFoldLayoutBaseline(stroke: StrokePath) {
-        // Intentionally no-op.
-    }
-
-    /** Compatibility no-op. */
-    fun refreshStrokeFoldLayoutBaseline(stroke: StrokePath) {
-        // Intentionally no-op.
-    }
-
-    fun remapAnchorsForDocumentChange(document: Document, event: DocumentEvent, strokes: List<StrokePath>) {
-        val editStart = event.offset
-        val replacedEnd = event.offset + event.oldLength
-        val insertedLength = event.newLength
-        val delta = insertedLength - event.oldLength
+    fun remapDrawingAnchorsForDocumentChanges(
+        document: Document,
+        edits: List<DocumentAnchorEdit>,
+        strokes: List<StrokePath>,
+        fills: List<RasterFillPath>,
+        annotations: List<AnnotationPath>
+    ) {
+        if (edits.isEmpty()) return
 
         for (stroke in strokes) {
             for (point in stroke.points) {
-                remapAnchorForDocumentChange(document, event, point)
+                remapAnchorOffsetForDocumentChanges(edits, point)
             }
+        }
+        for (fill in fills) {
+            remapAnchorOffsetForDocumentChanges(edits, fill.anchor)
+        }
+        for (annotation in annotations) {
+            remapAnchorOffsetForDocumentChanges(edits, annotation.anchor)
+        }
+
+        for (stroke in strokes) {
+            for (point in stroke.points) {
+                syncAnchorFromOffset(document, point)
+            }
+        }
+        for (fill in fills) {
+            syncAnchorFromOffset(document, fill.anchor)
+        }
+        for (annotation in annotations) {
+            syncAnchorFromOffset(document, annotation.anchor)
         }
     }
 
     fun remapAnchorForDocumentChange(document: Document, event: DocumentEvent, anchor: AnchorPoint) {
-        val editStart = event.offset
-        val replacedEnd = event.offset + event.oldLength
-        val insertedLength = event.newLength
-        val delta = insertedLength - event.oldLength
-        val insertedLineBreakIndex = insertedLineBreakIndexAtAnchor(event, anchor)
+        remapAnchorOffsetForDocumentChange(DocumentAnchorEdit.from(event), anchor)
+        syncAnchorFromOffset(document, anchor)
+    }
+
+    private fun remapAnchorOffsetForDocumentChanges(edits: List<DocumentAnchorEdit>, anchor: AnchorPoint) {
+        for (edit in edits) {
+            remapAnchorOffsetForDocumentChange(edit, anchor)
+        }
+    }
+
+    private fun remapAnchorOffsetForDocumentChange(edit: DocumentAnchorEdit, anchor: AnchorPoint) {
+        val editStart = edit.offset
+        val replacedEnd = edit.offset + edit.oldLength
+        val insertedLength = edit.newLength
+        val delta = insertedLength - edit.oldLength
+        val insertedLineBreakIndex = insertedLineBreakIndexAtAnchor(edit, anchor)
 
         anchor.offset = if (insertedLineBreakIndex != null) {
             editStart + insertedLineBreakIndex
         } else {
             remapOffset(anchor.offset, editStart, replacedEnd, insertedLength, delta)
         }
-        syncAnchorFromOffset(document, anchor)
     }
 
     fun normalizeAnchor(document: Document, anchor: AnchorPoint) {
@@ -611,11 +679,11 @@ class DrawingCoordinateMapper(
         }.coerceAtLeast(0)
     }
 
-    private fun insertedLineBreakIndexAtAnchor(event: DocumentEvent, anchor: AnchorPoint): Int? {
-        if (event.oldLength != 0) return null
-        if (anchor.offset != event.offset) return null
+    private fun insertedLineBreakIndexAtAnchor(edit: DocumentAnchorEdit, anchor: AnchorPoint): Int? {
+        if (edit.oldLength != 0) return null
+        if (anchor.offset != edit.offset) return null
 
-        val insertedText = event.newFragment
+        val insertedText = edit.newFragment
         for (index in 0 until insertedText.length) {
             val char = insertedText[index]
             if (char == '\n' || char == '\r') {

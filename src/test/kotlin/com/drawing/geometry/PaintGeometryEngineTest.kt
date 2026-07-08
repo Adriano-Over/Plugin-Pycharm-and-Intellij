@@ -156,40 +156,6 @@ class PaintGeometryEngineTest {
     }
 
     @Test
-    fun `raster fill ignores hidden semantic text support strokes`() {
-        val box = closedStroke(
-            Point(20, 20),
-            Point(100, 20),
-            Point(100, 100),
-            Point(20, 100),
-            Point(20, 20)
-        )
-        val semanticTextSupport = StrokePath(
-            color = Color.RED,
-            width = 6f,
-            points = mutableListOf(anchor(45, 55), anchor(85, 55)),
-            kind = ShapeKind.TEXT,
-            annotationText = ""
-        )
-
-        val result = PaintGeometryEngine.fillRasterAt(
-            strokes = listOf(box, semanticTextSupport),
-            existingRasterFills = emptyList(),
-            seedPoint = Point(50, 50),
-            fillColor = Color.GREEN,
-            panelBounds = Rectangle(0, 0, 140, 140),
-            toViewPoint = toViewPoint,
-            toAnchor = toAnchor
-        )
-
-        requireNotNull(result)
-        val image = RasterFillCodec.decodePngBase64(result.pngBase64)
-        val centerY = 55 - result.anchor.dy
-        val sampledColors = (0 until image.width).map { x -> image.getRGB(x, centerY.coerceIn(0, image.height - 1)) }.toSet()
-        assertEquals(setOf(Color.GREEN.rgb), sampledColors, "Hidden semantic text support strokes should not leave red pixels or split the fill")
-    }
-
-    @Test
     fun `raster fill returns null when region leaks to edge`() {
         val result = PaintGeometryEngine.fillRasterAt(
             strokes = emptyList(),
