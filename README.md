@@ -88,6 +88,8 @@ Run tests, build the distributable ZIP, and verify binary compatibility with the
 ./gradlew test buildPlugin verifyPlugin
 ```
 
+Release and rollback instructions are in [RELEASING.md](RELEASING.md).
+
 ## Development notes
 
 This project favors small, safe, reversible changes.

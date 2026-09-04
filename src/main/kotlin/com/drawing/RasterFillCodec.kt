@@ -58,7 +58,10 @@ internal object RasterFillCodec {
     }
 
     fun isSupportedPersistedRasterFill(width: Int, height: Int, pngBase64: String): Boolean {
-        return isSupportedDimensions(width, height) && isSupportedEncodedText(pngBase64)
+        if (!isSupportedDimensions(width, height) || !isSupportedEncodedText(pngBase64)) return false
+        return runCatching {
+            decodePngBase64(pngBase64, expectedWidth = width, expectedHeight = height)
+        }.isSuccess
     }
 
     private fun validateDimensions(

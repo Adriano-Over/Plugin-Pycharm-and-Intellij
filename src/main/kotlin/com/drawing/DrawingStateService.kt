@@ -183,6 +183,39 @@ class DrawingStateService(
         }
     }
 
+    fun moveDrawing(oldFilePath: String, newFilePath: String) {
+        val oldKey = fileComparisonKey(oldFilePath)
+        val newStoragePath = stableStoragePath(newFilePath)
+        val newKey = fileComparisonKey(newStoragePath)
+        if (oldKey.isEmpty() || newKey.isEmpty() || oldKey == newKey) return
+
+        updateState { oldState ->
+            val source = oldState.files.lastOrNull { fileComparisonKey(it.filePath) == oldKey }
+                ?: return@updateState oldState
+            val retained = oldState.files
+                .filterNot {
+                    val key = fileComparisonKey(it.filePath)
+                    key == oldKey || key == newKey
+                }
+                .map { it.deepCopy() }
+                .toMutableList()
+            retained += source.deepCopy().copy(filePath = newStoragePath)
+            oldState.copy(files = retained)
+        }
+    }
+
+    fun removeDrawing(filePath: String) {
+        val key = fileComparisonKey(filePath)
+        if (key.isEmpty()) return
+        updateState { oldState ->
+            val retained = oldState.files
+                .filterNot { fileComparisonKey(it.filePath) == key }
+                .map { it.deepCopy() }
+                .toMutableList()
+            if (retained.size == oldState.files.size) oldState else oldState.copy(files = retained)
+        }
+    }
+
     fun compactFileEntries() {
         val compactedFiles = compactFiles(state.files)
         val currentFiles = state.files

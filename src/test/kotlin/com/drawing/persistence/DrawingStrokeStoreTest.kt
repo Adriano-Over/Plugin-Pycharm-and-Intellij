@@ -11,6 +11,7 @@ import com.drawing.RasterFillPath
 import com.drawing.SavedFileDrawing
 import com.drawing.SavedPoint
 import com.drawing.SavedRasterFill
+import com.drawing.SavedStroke
 import com.drawing.ShapeKind
 import com.drawing.StrokePath
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 import java.awt.Color
 import java.awt.image.BufferedImage
+import java.util.Base64
 
 class DrawingStrokeStoreTest {
     private val projectBasePath = "C:/work/drawing-project"
@@ -187,6 +189,53 @@ class DrawingStrokeStoreTest {
         store.loadPersistedStrokes(filePath, document) { _, _ -> }
 
         assertEquals(listOf(123L), store.currentRasterFills(document).map { it.id })
+    }
+
+    @Test
+    fun `load skips malformed strokes and raster payloads while preserving valid content`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val store = DrawingStrokeStore(service)
+        val document = testDocument()
+        val image = BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)
+        val validFill = SavedRasterFill(
+            id = 101L,
+            width = 2,
+            height = 2,
+            pngBase64 = RasterFillCodec.encodePngBase64(image)
+        )
+        val nonImageFill = SavedRasterFill(
+            id = 102L,
+            width = 2,
+            height = 2,
+            pngBase64 = Base64.getEncoder().encodeToString("not a png".toByteArray())
+        )
+        val wrongDimensionsFill = SavedRasterFill(
+            id = 103L,
+            width = 3,
+            height = 2,
+            pngBase64 = RasterFillCodec.encodePngBase64(image)
+        )
+        service.loadState(
+            service.state.copy(
+                files = mutableListOf(
+                    SavedFileDrawing(
+                        filePath = "\$PROJECT_DIR$/src/Main.kt",
+                        strokes = mutableListOf(
+                            SavedStroke(width = 3.5f, points = mutableListOf(SavedPoint(line = 1))),
+                            SavedStroke(width = Float.NaN, points = mutableListOf(SavedPoint(line = 2))),
+                            SavedStroke(width = 0f, points = mutableListOf(SavedPoint(line = 3))),
+                            SavedStroke(width = 3.5f, points = mutableListOf())
+                        ),
+                        rasterFills = mutableListOf(validFill, nonImageFill, wrongDimensionsFill)
+                    )
+                )
+            )
+        )
+
+        val loaded = store.loadPersistedStrokes(filePath, document) { _, _ -> }
+
+        assertEquals(listOf(1), loaded.map { it.points.single().line })
+        assertEquals(listOf(101L), store.currentRasterFills(document).map { it.id })
     }
 
     @Test

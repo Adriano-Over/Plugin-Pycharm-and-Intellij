@@ -6,6 +6,19 @@ This project follows a simple changelog format focused on practical development 
 
 ## Unreleased
 
+## 6.0.4 - 2026-09-04
+
+### Fixed
+
+- Skipped malformed strokes and raster-fill payloads during recovery instead of allowing invalid data to fail later while painting.
+- Migrated the persisted drawing key when an open source file is renamed, avoiding stale duplicate drawing entries.
+- Removed persisted drawing state when an open source file is deleted instead of recreating an orphaned entry during editor cleanup.
+
+### Tests and operations
+
+- Added coverage for corrupted and partially valid saved drawings, project relocation, renamed and deleted file state, large drawings, immutable history snapshots, and undo/redo isolation between documents.
+- Documented the release, recovery, and rollback procedure.
+
 ## 6.0.3 - 2026-09-04
 
 ### Build and maintenance

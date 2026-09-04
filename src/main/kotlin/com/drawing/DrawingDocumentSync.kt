@@ -24,6 +24,7 @@ class DrawingDocumentSync(
     private var persistenceTimer: Timer? = null
     private var documentChangeUiTimer: Timer? = null
     private var pendingUiDocument: Document? = null
+    private var loadedFilePath: String? = null
     private val pendingDocumentEdits = mutableListOf<DocumentAnchorEdit>()
 
     fun bindDocumentListener(document: Document) {
@@ -61,6 +62,7 @@ class DrawingDocumentSync(
         val editor = currentEditor() ?: return
         val filePath = currentFilePath() ?: return
         val document = editor.document
+        loadedFilePath = filePath
         val loaded = strokeStore.loadPersistedStrokes(filePath, document) { doc, anchor ->
             coordinateMapper.normalizeAnchor(doc, anchor)
         }
@@ -91,7 +93,13 @@ class DrawingDocumentSync(
 
     fun persistCurrentStrokes() {
         cancelPendingPersistence()
-        strokeStore.persistDrawing(currentFilePath(), currentStrokes(), currentRasterFills(), currentAnnotations())
+        val filePath = currentFilePath() ?: return
+        val previousPath = loadedFilePath
+        if (previousPath != null && previousPath != filePath) {
+            strokeStore.movePersistedDrawing(previousPath, filePath)
+        }
+        strokeStore.persistDrawing(filePath, currentStrokes(), currentRasterFills(), currentAnnotations())
+        loadedFilePath = filePath
     }
 
     private fun scheduleDocumentChangeFlush(document: Document) {

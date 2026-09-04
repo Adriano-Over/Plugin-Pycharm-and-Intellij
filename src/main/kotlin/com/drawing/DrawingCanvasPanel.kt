@@ -280,7 +280,7 @@ class DrawingCanvasPanel(
 
     fun bindEditor(editor: Editor) {
         DrawingDiagnosticLog.info("PANEL", "bindEditor beforePersist currentFile=${currentFile?.path} strokes=${currentStrokes().size}")
-        documentSync.persistCurrentStrokes()
+        persistOrDiscardCurrentDrawing()
         documentSync.unbindDocumentListener()
         this.editor = editor
         currentFile = FileDocumentManager.getInstance().getFile(editor.document)
@@ -301,7 +301,7 @@ class DrawingCanvasPanel(
 
     fun unbindEditor() {
         DrawingDiagnosticLog.info("PANEL", "unbindEditor file=${currentFile?.path} strokes=${currentStrokes().size}")
-        documentSync.persistCurrentStrokes()
+        persistOrDiscardCurrentDrawing()
         documentSync.unbindDocumentListener()
         unbindFoldListener()
         editor = null
@@ -313,6 +313,16 @@ class DrawingCanvasPanel(
         updateToolCursor()
         refreshFoldLayoutState(null)
         repaint()
+    }
+
+    private fun persistOrDiscardCurrentDrawing() {
+        val file = currentFile
+        if (file != null && !file.isValid) {
+            documentSync.cancelPendingPersistence()
+            drawingStateService.removeDrawing(file.path)
+            return
+        }
+        documentSync.persistCurrentStrokes()
     }
 
     fun setDrawingMode() {

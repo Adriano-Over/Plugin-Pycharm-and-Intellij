@@ -78,7 +78,10 @@ class DrawingStrokeStore(
         val savedRasterFills = stateService.getRasterFills(filePath)
         val savedAnnotations = stateService.getAnnotations(filePath)
         DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes file=$filePath saved=${savedFromState.size}")
-        val loaded = savedFromState.map { saved ->
+        val loaded = savedFromState.mapNotNull { saved ->
+            if (!saved.width.isFinite() || saved.width <= 0f || saved.points.isEmpty()) {
+                return@mapNotNull null
+            }
             StrokePath(
                 color = Color(saved.color, true),
                 width = saved.width,
@@ -145,6 +148,10 @@ class DrawingStrokeStore(
         annotationsByDocument[document] = loadedAnnotations
         DrawingDiagnosticLog.info("STORE", "loadPersistedStrokes mapped=${loaded.size} rasterFills=${loadedRasterFills.size} annotations=${loadedAnnotations.size} file=$filePath")
         return loaded
+    }
+
+    fun movePersistedDrawing(oldFilePath: String, newFilePath: String) {
+        stateService.moveDrawing(oldFilePath, newFilePath)
     }
 
     fun persistStrokes(filePath: String?, strokes: List<StrokePath>) {

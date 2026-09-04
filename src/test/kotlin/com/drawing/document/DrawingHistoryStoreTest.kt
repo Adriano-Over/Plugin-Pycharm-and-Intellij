@@ -60,6 +60,51 @@ class DrawingHistoryStoreTest {
         assertEquals(false, history.canUndo(document), "Identical consecutive states should only create one undo entry")
     }
 
+    @Test
+    fun `undo and redo histories stay isolated while switching documents`() {
+        val firstDocument = testDocument("FirstDocument")
+        val secondDocument = testDocument("SecondDocument")
+        val history = DrawingHistoryStore()
+        val firstStroke = stroke(Color.RED, dx = 10)
+        val secondStroke = stroke(Color.BLUE, dx = 20)
+
+        history.saveStateForUndo(firstDocument, listOf(firstStroke))
+        history.saveStateForUndo(secondDocument, listOf(secondStroke))
+
+        val firstUndo = history.restoreUndo(firstDocument, emptyList())!!
+        assertEquals(Color.RED, firstUndo.strokes.single().color)
+        assertEquals(false, history.canUndo(firstDocument))
+        assertEquals(true, history.canRedo(firstDocument))
+        assertEquals(true, history.canUndo(secondDocument))
+        assertEquals(false, history.canRedo(secondDocument))
+
+        val secondUndo = history.restoreUndo(secondDocument, emptyList())!!
+        assertEquals(Color.BLUE, secondUndo.strokes.single().color)
+        assertEquals(true, history.canRedo(firstDocument))
+        assertEquals(true, history.canRedo(secondDocument))
+    }
+
+    @Test
+    fun `history snapshots remain immutable after source mutation`() {
+        val document = testDocument()
+        val history = DrawingHistoryStore()
+        val stroke = stroke(Color.RED, dx = 5)
+
+        history.saveStateForUndo(document, listOf(stroke))
+        stroke.points.single().dx = 99
+
+        val restored = history.restoreUndo(document, emptyList())!!
+        assertEquals(5, restored.strokes.single().points.single().dx)
+    }
+
+    private fun stroke(color: Color, dx: Int): StrokePath {
+        return StrokePath(
+            color = color,
+            width = 3.5f,
+            points = mutableListOf(AnchorPoint(line = 0, column = 0, dx = dx, dy = 2))
+        )
+    }
+
     private fun rasterFill(id: Long, dx: Int): RasterFillPath {
         return RasterFillPath(
             id = id,

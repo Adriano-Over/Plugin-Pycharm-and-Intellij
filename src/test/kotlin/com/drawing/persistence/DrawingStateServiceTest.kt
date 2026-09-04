@@ -12,6 +12,7 @@ import com.drawing.UNSET_FOLD_HIDDEN_HEIGHT_ABOVE
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
+import java.awt.Color
 
 class DrawingStateServiceTest {
     private val projectBasePath = "C:/work/drawing-project"
@@ -78,6 +79,69 @@ class DrawingStateServiceTest {
         assertEquals("\$PROJECT_DIR$/src/Main.kt", service.state.files.single().filePath)
         assertEquals(0xFF00FF00.toInt(), service.getStrokes(filePath).single().color)
         assertEquals(2, service.getStrokes(filePath).single().points.single().line)
+    }
+
+    @Test
+    fun `project relative drawings survive project relocation`() {
+        val original = DrawingStateService(testProject("C:/old/location/drawing-project"))
+        original.setStrokes(
+            "C:/old/location/drawing-project/src/Main.kt",
+            listOf(savedStroke(color = 0xFF123456.toInt(), line = 8))
+        )
+
+        val relocated = DrawingStateService(testProject("D:/new/location/drawing-project"))
+        relocated.loadState(original.state.copy())
+
+        assertEquals(
+            0xFF123456.toInt(),
+            relocated.getStrokes("D:/new/location/drawing-project/src/Main.kt").single().color
+        )
+        assertEquals("\$PROJECT_DIR$/src/Main.kt", relocated.state.files.single().filePath)
+    }
+
+    @Test
+    fun `renaming a file migrates its drawing and replaces a stale destination`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val oldPath = "$projectBasePath/src/OldName.kt"
+        val newPath = "$projectBasePath/src/NewName.kt"
+        service.setStrokes(oldPath, listOf(savedStroke(color = 0xFF112233.toInt(), line = 3)))
+        service.setStrokes(newPath, listOf(savedStroke(color = 0xFF999999.toInt(), line = 9)))
+
+        service.moveDrawing(oldPath, newPath)
+
+        assertEquals(emptyList<SavedStroke>(), service.getStrokes(oldPath))
+        assertEquals(0xFF112233.toInt(), service.getStrokes(newPath).single().color)
+        assertEquals(listOf("\$PROJECT_DIR$/src/NewName.kt"), service.state.files.map { it.filePath })
+    }
+
+    @Test
+    fun `deleted file state can be removed without affecting other drawings`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val deletedPath = "$projectBasePath/src/Deleted.kt"
+        val retainedPath = "$projectBasePath/src/Retained.kt"
+        service.setStrokes(deletedPath, listOf(savedStroke(color = Color.RED.rgb, line = 1)))
+        service.setStrokes(retainedPath, listOf(savedStroke(color = Color.BLUE.rgb, line = 2)))
+
+        service.removeDrawing(deletedPath)
+
+        assertEquals(emptyList<SavedStroke>(), service.getStrokes(deletedPath))
+        assertEquals(Color.BLUE.rgb, service.getStrokes(retainedPath).single().color)
+    }
+
+    @Test
+    fun `large drawing state is preserved without sharing mutable points`() {
+        val service = DrawingStateService(testProject(projectBasePath))
+        val strokes = (0 until 10_000).map { index ->
+            savedStroke(color = 0xFF000000.toInt() or index, line = index)
+        }
+
+        service.setStrokes(filePath, strokes)
+        val loaded = service.getStrokes(filePath)
+        loaded.first().points.first().line = -1
+
+        assertEquals(10_000, loaded.size)
+        assertEquals(0, service.getStrokes(filePath).first().points.first().line)
+        assertEquals(9_999, service.getStrokes(filePath).last().points.first().line)
     }
 
     @Test
