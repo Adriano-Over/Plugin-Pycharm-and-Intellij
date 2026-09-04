@@ -17,7 +17,6 @@ It is designed for quick visual notes, sketches, explanations, and temporary ann
 - Current color preview
 - Undo and redo
 - Clear drawings with confirmation
-- Status bar toggle
 - Tool window integration
 - Per-document drawing persistence
 
@@ -34,17 +33,19 @@ settings.gradle.kts
 Important areas:
 
 ```text
-DrawingToolbarPanel.kt                 Drawing toolbar UI
-DrawingService.kt             Main plugin/window lifecycle service
-EditorOverlayController.kt     Editor overlay visibility/control
-DrawingCanvasPanel.kt          Drawing overlay panel
-DrawingInputController.kt      Mouse/tool input handling
-DrawingCanvasPainter.kt        Canvas rendering
-FillGeometryEngine.kt          Fill behavior
-EraseGeometryEngine.kt         Erase behavior
-PaintGeometryEngine.kt         Paint geometry behavior
-DrawingStatusBarWidget.kt     Bottom status bar widget
-RecentColorStore.kt            Recent color memory
+DrawingToolWindowPanel.kt       Tool window and floating toolbar lifecycle
+DrawingToolbarPanel.kt          Drawing toolbar UI
+EditorOverlayController.kt      Editor overlay visibility/control
+DrawingCanvasPanel.kt           Drawing overlay panel
+DrawingCanvasController.kt      Drawing operations and history coordination
+DrawingInputController.kt       Mouse/tool input handling
+DrawingCanvasPainter.kt         Canvas rendering
+DrawingStateService.kt          Project-level persistent state
+DrawingStrokeStore.kt           Per-document drawing storage
+FillGeometryEngine.kt           Fill-region discovery
+RasterFillEraseEngine.kt        Raster-fill erasing
+AnnotationRenderer.kt           Semantic text rendering
+RecentColorStore.kt             Recent color memory
 ```
 
 ## Requirements
@@ -79,6 +80,14 @@ The built plugin ZIP will be generated under:
 build/distributions/
 ```
 
+## Verify compatibility
+
+Run tests, build the distributable ZIP, and verify binary compatibility with the supported IntelliJ IDEA and PyCharm platform versions:
+
+```bash
+./gradlew test buildPlugin verifyPlugin
+```
+
 ## Development notes
 
 This project favors small, safe, reversible changes.
@@ -97,7 +106,7 @@ Fill and erase behavior should be tested together because changes to fill geomet
 
 After a change, run the plugin and check:
 
-- Drawing opens and closes from the status bar widget
+- Drawing opens and closes from the tool window
 - Overlay button switches between ON and OFF correctly
 - Draw mode works
 - Erase mode works and shows the eraser preview

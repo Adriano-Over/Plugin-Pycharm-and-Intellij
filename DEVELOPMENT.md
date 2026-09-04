@@ -50,7 +50,6 @@ After each change, test the plugin manually in the IDE sandbox.
 ### Startup and visibility
 
 - Drawing loads without startup errors.
-- Status bar widget appears.
 - Floating bar can be shown and hidden.
 - Overlay button correctly shows `Overlay ON` and `Overlay OFF`.
 
@@ -106,7 +105,7 @@ git commit -m "Add project documentation"
 These files are usually safer places for toolbar/status/cursor polish:
 
 - `DrawingToolbarPanel.kt`
-- `DrawingStatusBarWidget.kt`
+- `DrawingToolWindowPanel.kt`
 - `DrawingCanvasPanel.kt`
 - `DrawingCanvasPainter.kt`
 - `DrawingInputController.kt`

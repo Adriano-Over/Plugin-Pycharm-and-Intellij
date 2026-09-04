@@ -6,6 +6,18 @@ This project follows a simple changelog format focused on practical development 
 
 ## Unreleased
 
+## 6.0.3 - 2026-09-04
+
+### Build and maintenance
+
+- Added CI for tests, plugin packaging, and IntelliJ Plugin Verifier checks.
+- Updated the IntelliJ Platform Gradle Plugin to 2.18.1.
+- Added explicit IntelliJ IDEA and PyCharm verifier targets.
+- Removed the upper IDE build restriction so verified future IDE releases are not blocked automatically.
+- Aligned the Gradle artifact version with the 6.0.3 project history.
+- Removed generated IntelliJ Platform cache files from version control.
+- Updated project documentation to match the current tool-window, raster-fill, and semantic-text architecture.
+
 ### Added
 
 - Added editor tool cursor feedback for Draw, Erase, Fill, and Shape modes.

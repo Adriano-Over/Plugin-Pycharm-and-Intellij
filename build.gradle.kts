@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Exec
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import org.gradle.api.tasks.testing.Test
@@ -7,7 +8,7 @@ import org.jetbrains.intellij.platform.gradle.IntelliJPlatformType
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.2.20"
-    id("org.jetbrains.intellij.platform") version "2.17.0"
+    id("org.jetbrains.intellij.platform") version "2.18.1"
 }
 
 group = providers.gradleProperty("pluginGroup").get()
@@ -41,7 +42,11 @@ dependencies {
         create(
             providers.gradleProperty("platformType").get(),
             providers.gradleProperty("platformVersion").get()
-        )
+        ) {
+            // PyCharm Community 2025.2 is resolved from the Maven platform
+            // artifact because its standalone installer is no longer listed.
+            useInstaller = false
+        }
     }
 }
 
@@ -56,13 +61,30 @@ java {
 }
 
 intellijPlatform {
+    // This plugin has no Settings/Preferences configurables.
+    buildSearchableOptions = false
+
     pluginConfiguration {
         name = providers.gradleProperty("pluginName").get()
 
         ideaVersion {
             sinceBuild = providers.gradleProperty("pluginSinceBuild").get()
-            untilBuild = providers.gradleProperty("pluginUntilBuild").get()
         }
+    }
+
+    pluginVerification {
+        ides {
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2025.2.1")
+            create(IntelliJPlatformType.PyCharmProfessional, "2025.2.1")
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        // Do not generate compatibility bridges that make inherited IntelliJ
+        // interface defaults appear as internal API calls in Plugin Verifier.
+        jvmDefault.set(JvmDefaultMode.NO_COMPATIBILITY)
     }
 }
 
